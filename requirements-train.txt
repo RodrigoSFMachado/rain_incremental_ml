@@ -1,0 +1,12 @@
+# Dependências de treino e experimentação.
+# Não entram na imagem da API.
+
+-r requirements.txt
+
+pandas==2.2.3
+pyarrow==18.1.0
+matplotlib==3.10.0
+mlflow==3.15.1
+pytest==8.3.4
+httpx==0.28.1
+streamlit==1.41.1

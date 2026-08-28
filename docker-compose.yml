@@ -1,0 +1,42 @@
+# Sobe a API e o dashboard.
+#
+#   docker compose up --build
+#   API .......... http://localhost:8000/docs
+#   Dashboard .... http://localhost:8501
+#
+# Os volumes são o ponto importante: sem eles, o modelo atualizado via
+# /update e o histórico de predições desapareceriam a cada restart.
+# São também o que liga os dois serviços — o dashboard lê o mesmo
+# arquivo SQLite que a API escreve, sem acoplamento entre os processos.
+
+services:
+  api:
+    build: .
+    container_name: rain-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models    # modelo atualizado + registro de versões
+      - ./data:/app/data        # SQLite de monitoramento
+    environment:
+      MODEL_PATH: /app/models/model.pt
+      DB_PATH: /app/data/monitoring.db
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: rain-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      # Somente leitura: o dashboard nunca escreve no banco.
+      - ./data:/app/data:ro
+      - ./models:/app/models:ro
+    environment:
+      DB_PATH: /app/data/monitoring.db
+      REGISTRY_PATH: /app/models/registry.json
+    depends_on:
+      - api
+    restart: unless-stopped

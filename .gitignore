@@ -1,0 +1,120 @@
+# ═══════════════════════════════════════════════════════════════
+# Dados
+# ═══════════════════════════════════════════════════════════════
+# O CSV bruto tem 31 MB e é dado público: quem clona baixa da fonte
+# (Iowa Environmental Mesonet). O parquet é derivado dele.
+data/*.csv
+data/*.parquet
+
+# Banco de monitoramento: criado em runtime pela API, cresce com o
+# uso e é específico da execução de cada pessoa.
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Mantém a pasta data/ no repositório mesmo estando vazia, para que
+# quem clonar não precise criá-la à mão.
+!data/.gitkeep
+
+
+# ═══════════════════════════════════════════════════════════════
+# MLflow
+# ═══════════════════════════════════════════════════════════════
+# Histórico de experimentos é local e pessoal. As métricas que
+# importam já estão no README e em reports/.
+mlflow.db
+mlruns/
+mlartifacts/
+
+
+# ═══════════════════════════════════════════════════════════════
+# ATENÇÃO: o que NÃO deve ser ignorado
+# ═══════════════════════════════════════════════════════════════
+# models/model.pt  -> 9,6 KB, e o Dockerfile faz COPY models/.
+#                     Se for ignorado, o build da imagem quebra.
+# models/registry.json
+# reports/*.png    -> o README exibe esses gráficos.
+#
+# Contraintuitivo, porque .pt costuma ser binário grande. Aqui o
+# checkpoint é minúsculo e é parte do artefato entregue.
+#
+# Antes de commitar, confira que o modelo é o do treino inicial:
+#   python -m training.train_initial --no-mlflow
+# Rodar simulate_production.py sobrescreve o model.pt.
+
+
+# ═══════════════════════════════════════════════════════════════
+# Python
+# ═══════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Empacotamento
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testes e cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+
+# ═══════════════════════════════════════════════════════════════
+# Configuração e segredos
+# ═══════════════════════════════════════════════════════════════
+# Este projeto não usa .env hoje, mas a regra fica: nenhum arquivo
+# com credencial entra no histórico do git. Uma vez commitado, um
+# segredo continua no histórico mesmo depois de removido.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+
+# ═══════════════════════════════════════════════════════════════
+# Editores
+# ═══════════════════════════════════════════════════════════════
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+
+# ═══════════════════════════════════════════════════════════════
+# Sistema operacional
+# ═══════════════════════════════════════════════════════════════
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Linux
+.fuse_hidden*
+.Trash-*

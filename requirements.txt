@@ -1,0 +1,13 @@
+# Dependências da API em produção.
+#
+# O torch NÃO está listado aqui: ele é instalado no Dockerfile a partir
+# do índice CPU-only da PyTorch. A versão do PyPI vem com as bibliotecas
+# CUDA embutidas e passa de 2 GB, o que estoura qualquer free tier.
+# Instalação equivalente fora do Docker:
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+numpy==2.2.1

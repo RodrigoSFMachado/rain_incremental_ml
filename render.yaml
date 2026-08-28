@@ -1,0 +1,32 @@
+# Deploy no Render (free tier).
+#
+# Uso: no painel do Render, "New > Blueprint" e apontar para o repositório.
+#
+# Duas limitações do plano gratuito que valem conhecer antes:
+#
+# 1. O serviço hiberna após 15 minutos sem tráfego. A primeira
+#    requisição depois disso leva até um minuto para responder.
+#
+# 2. O disco é efêmero. O modelo atualizado via /update volta ao estado
+#    do commit a cada restart. Para persistir de verdade seria preciso
+#    um volume pago ou armazenamento externo — o que está fora do
+#    escopo deste projeto e documentado no README.
+#
+# O plano gratuito tem 512 MB de RAM. O import do torch consome cerca
+# de 250 MB, então a imagem precisa obrigatoriamente usar o torch
+# CPU-only (já configurado no Dockerfile). A versão do PyPI, com as
+# bibliotecas CUDA, não cabe.
+
+services:
+  - type: web
+    name: rain-prediction-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: MODEL_PATH
+        value: /app/models/model.pt
+      - key: DB_PATH
+        value: /app/data/monitoring.db
