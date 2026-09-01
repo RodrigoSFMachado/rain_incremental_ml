@@ -10,9 +10,10 @@ do estado salvo em vez de recomeçar do zero.
 import sys
 from pathlib import Path
 
+import torch
 import numpy as np
 import pytest
-import torch
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

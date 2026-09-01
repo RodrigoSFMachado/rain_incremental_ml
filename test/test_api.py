@@ -9,6 +9,7 @@ tocar nos artefatos do projeto.
 import sys
 from pathlib import Path
 
+import torch
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
