@@ -1,7 +1,7 @@
 """Experimento: vale a pena atualizar o modelo ao longo do tempo?
 
 Compara três políticas de atualização sobre a mesma sequência de
-janelas temporais, adaptando a metodologia do notebook original:
+janelas temporais:
 
     Static       treina uma vez na primeira janela e nunca mais muda.
     Retrain      a cada passo, cria um modelo novo e treina do zero
@@ -12,7 +12,7 @@ janelas temporais, adaptando a metodologia do notebook original:
 Além dos três, a baseline de persistência ("se está chovendo agora,
 vai chover na próxima hora") é avaliada nas mesmas janelas.
 
-Protocolo (mesmo do notebook original):
+Protocolo:
     - 180 dias de treino
     - 14 dias de teste
     - passo de 14 dias
@@ -22,8 +22,14 @@ Nenhuma janela usa dados do futuro. O rótulo verdadeiro só é
 incorporado ao modelo depois que a previsão daquela janela já foi
 registrada.
 
+Sobre o learning rate: o cenário incremental usa `LR_UPDATE` de
+`app/model.py`, que é o mesmo default do endpoint `/update`. Para
+reproduzir a ablação documentada no README, use `--lr-update` e
+`--epochs-update` em vez de editar as constantes.
+
 Uso:
     python -m training.experiment
+    python -m training.experiment --lr-update 3e-5 --out reports/lr3e-5
 """
 
 from __future__ import annotations
@@ -34,7 +40,6 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import torch
 import numpy as np
 import pandas as pd
 
@@ -117,6 +122,11 @@ def train_fresh(train_df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> RainMod
     A calibração usa os últimos `CALIB_DAYS` dias do próprio período de
     treino. É a única informação disponível no momento — usar a janela
     de teste para escolher o limiar seria vazamento.
+
+    Nota: `RainModel(seed=SEED)` refixa as sementes globais do processo
+    (ver `app.model.set_seed`). É o que torna o experimento
+    reprodutível, mas significa que cada retrain reinicia também a
+    sequência aleatória usada pelo cenário incremental.
     """
     model = RainModel(seed=SEED)
 
@@ -140,7 +150,12 @@ def train_fresh(train_df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> RainMod
 # Experimento
 # --------------------------------------------------------------------------
 
-def run_experiment(df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> pd.DataFrame:
+def run_experiment(
+    df: pd.DataFrame,
+    epochs: int = EPOCHS_INITIAL,
+    lr_update: float = LR_UPDATE,
+    epochs_update: int = EPOCHS_UPDATE,
+) -> pd.DataFrame:
     """Executa os três cenários sobre as mesmas janelas.
 
     Returns:
@@ -149,7 +164,8 @@ def run_experiment(df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> pd.DataFra
     """
     windows = create_windows(df)
     print(f"{len(windows)} janelas de {TEST_DAYS} dias "
-          f"({windows[0]['test_start'].date()} -> {windows[-1]['test_end'].date()})\n")
+          f"({windows[0]['test_start'].date()} -> {windows[-1]['test_end'].date()})")
+    print(f"incremental: {epochs_update} épocas, lr {lr_update:g}\n")
 
     # Todos os cenários partem do mesmo modelo inicial, treinado na
     # primeira janela. Assim a comparação isola a política de
@@ -177,10 +193,10 @@ def run_experiment(df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> pd.DataFra
         X_test, y_test = as_arrays(test_df)
 
         # ---- Retrain: modelo novo com os 180 dias mais recentes ----
-        # Diferente do notebook original, aqui o retrain roda o mesmo
-        # número de épocas do treino inicial. Sem isso ele ficaria
-        # subtreinado e a vantagem do incremental seria um artefato
-        # do número de passos de gradiente, não da política.
+        # O retrain roda o mesmo número de épocas do treino inicial.
+        # Sem isso ele ficaria subtreinado e a vantagem do incremental
+        # seria um artefato do número de passos de gradiente, não da
+        # política de atualização.
         retrain_df = slice_period(df, w["train_start"], w["train_end"])
         models["retrain"] = train_fresh(retrain_df, epochs)
 
@@ -226,7 +242,7 @@ def run_experiment(df: pd.DataFrame, epochs: int = EPOCHS_INITIAL) -> pd.DataFra
         # duas coisas ao mesmo tempo e não saberíamos qual delas explica
         # a diferença.
         inc = models["incremental"]
-        inc.incremental_fit(X_test, y_test, epochs=EPOCHS_UPDATE, lr=LR_UPDATE)
+        inc.incremental_fit(X_test, y_test, epochs=epochs_update, lr=lr_update)
 
         if w["window"] % 20 == 0:
             print(f"  janela {w['window']:>3}  {w['test_start'].date()}  "
@@ -269,7 +285,7 @@ def print_table(df: pd.DataFrame, label: str, key: str = "scenario") -> None:
 
 
 def make_plots(results: pd.DataFrame, out_dir: Path) -> None:
-    """Gera os dois gráficos do README."""
+    """Gera os dois gráficos usados no README."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -326,11 +342,30 @@ def main() -> None:
     parser.add_argument("--data", default="data/dataset.parquet")
     parser.add_argument("--out", default="reports")
     parser.add_argument("--epochs", type=int, default=EPOCHS_INITIAL)
+    parser.add_argument(
+        "--lr-update", type=float, default=LR_UPDATE,
+        help=f"Taxa de aprendizado do cenário incremental. Padrão: {LR_UPDATE:g}.",
+    )
+    parser.add_argument(
+        "--epochs-update", type=int, default=EPOCHS_UPDATE,
+        help=f"Épocas por lote no cenário incremental. Padrão: {EPOCHS_UPDATE}.",
+    )
     parser.add_argument("--no-mlflow", action="store_true")
     args = parser.parse_args()
 
+    if not Path(args.data).exists():
+        raise SystemExit(
+            f"Dataset não encontrado: {args.data}\n"
+            f"Rode antes: python -m training.prepare_data"
+        )
+
     df = pd.read_parquet(args.data).sort_values("valid").reset_index(drop=True)
-    results = run_experiment(df, epochs=args.epochs)
+    results = run_experiment(
+        df,
+        epochs=args.epochs,
+        lr_update=args.lr_update,
+        epochs_update=args.epochs_update,
+    )
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -365,7 +400,7 @@ def main() -> None:
             mlflow.log_params({
                 "train_days": TRAIN_DAYS, "test_days": TEST_DAYS,
                 "step_days": STEP_DAYS, "epochs": args.epochs,
-                "epochs_update": EPOCHS_UPDATE, "lr_update": LR_UPDATE,
+                "epochs_update": args.epochs_update, "lr_update": args.lr_update,
                 "n_windows": int(results["window"].nunique()),
             })
             for _, r in overall.iterrows():

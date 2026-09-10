@@ -9,6 +9,11 @@ Divisão temporal (sem embaralhar — os dados são uma série no tempo):
     validação  : 2023          -> calibra o limiar de decisão
     teste      : 2024 - 2025   -> avaliação final, usada uma única vez
 
+Por que não um split aleatório: embaralhar colocaria observações de
+julho de 2025 no treino e de junho de 2025 no teste. Como horas
+vizinhas são altamente correlacionadas, o modelo estaria praticamente
+consultando a resposta, e a métrica de teste seria otimista demais.
+
 Uso:
     python -m training.train_initial
     mlflow ui --backend-store-uri sqlite:///mlflow.db   # para ver os resultados
@@ -20,7 +25,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
 import numpy as np
 import pandas as pd
 
@@ -50,7 +54,11 @@ def split(df: pd.DataFrame):
 
 
 def as_arrays(df: pd.DataFrame):
-    """Extrai X e y no formato esperado pelo modelo."""
+    """Extrai X e y no formato esperado pelo modelo.
+
+    A seleção por `FEATURE_NAMES` garante a ordem canônica, mesmo que o
+    parquet tenha as colunas em outra sequência.
+    """
     X = df[FEATURE_NAMES].to_numpy(dtype=np.float32)
     y = df[TARGET].to_numpy(dtype=np.float32)
     return X, y
@@ -60,7 +68,8 @@ def persistence_baseline(df: pd.DataFrame) -> dict:
     """Baseline trivial: se está chovendo agora, vai chover na próxima hora.
 
     Serve para responder à pergunta que todo entrevistador faz: o modelo
-    é melhor do que o palpite óbvio?
+    é melhor do que o palpite óbvio? Sem baseline, um F1 de 0,53 não
+    significa nada — pode ser excelente ou pior que adivinhar.
     """
     _, y = as_arrays(df)
     return evaluate(y, df["rain_now"].to_numpy(dtype=float), threshold=0.5)
@@ -80,6 +89,12 @@ def main() -> None:
         help="Desliga o tracking (útil em CI ou em ambiente sem MLflow).",
     )
     args = parser.parse_args()
+
+    if not Path(args.data).exists():
+        raise SystemExit(
+            f"Dataset não encontrado: {args.data}\n"
+            f"Rode antes: python -m training.prepare_data"
+        )
 
     df = pd.read_parquet(args.data)
     train, val, test = split(df)
@@ -101,6 +116,7 @@ def main() -> None:
     print(f"\nloss final : {loss:.4f}   pos_weight: {model.pos_weight:.2f}")
 
     # ------------------------------------------- calibração do limiar
+    # Só validação. Calibrar no teste transformaria o teste em treino.
     threshold = model.calibrate_threshold(X_val, y_val)
     print(f"threshold  : {threshold:.2f}  (calibrado em {VAL_YEAR})")
 
@@ -134,11 +150,17 @@ def main() -> None:
         stage="initial_training",
         n_samples=len(train),
         metrics={k: test_metrics[k] for k in ("f1", "precision", "recall", "roc_auc")},
-        notes=f"Treino inicial {TRAIN_YEARS[0]}-{TRAIN_YEARS[1]}",
+        notes=(
+            f"Treino inicial {TRAIN_YEARS[0]}-{TRAIN_YEARS[1]}. "
+            f"Métricas medidas no conjunto de teste "
+            f"{TEST_YEARS[0]}-{TEST_YEARS[1]}, com limiar calibrado em {VAL_YEAR}."
+        ),
     )
-    print("registrado em  : models/registry.json")
+    print(f"registrado em  : {registry.REGISTRY_PATH}")
 
     # ---------------------------------------------------------- MLflow
+    # MLflow entra só aqui, no offline. A API não depende dele em
+    # runtime, e por isso ele não está no requirements.txt.
     if not args.no_mlflow:
         try:
             import mlflow

@@ -8,6 +8,16 @@ sabe se choveu depois que a hora passou.
 Serve para dois propósitos: popular o banco de monitoramento com dados
 realistas para o dashboard, e demonstrar o ciclo completo do sistema.
 
+ATENÇÃO — este script MODIFICA artefatos do projeto:
+
+    models/model.pt        sobrescrito a cada /update (versão avança)
+    models/registry.json   ganha uma entrada por atualização
+    data/monitoring.db     ganha predições, updates e avaliações
+
+Se você pretende commitar o modelo do treino inicial, rode
+`python -m training.train_initial` depois da simulação para restaurar o
+checkpoint v1, ou use `--no-update` para apenas gerar predições.
+
 Uso:
     # contra uma API já rodando:
     uvicorn app.main:app &
@@ -24,7 +34,6 @@ import sys
 from pathlib import Path
 
 import httpx
-import torch
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,7 +44,11 @@ UPDATE_EVERY_DAYS = 14
 
 
 def to_payload(row: pd.Series) -> dict:
-    """Converte uma linha do dataset no corpo esperado por `/predict`."""
+    """Converte uma linha do dataset no corpo esperado por `/predict`.
+
+    Usa `FEATURE_NAMES` de `app/constants.py`, a mesma lista que o
+    schema da API usa para montar o vetor. Uma lista só, um contrato só.
+    """
     return {name: float(row[name]) for name in FEATURE_NAMES}
 
 
@@ -55,6 +68,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if not Path(args.data).exists():
+        raise SystemExit(
+            f"Dataset não encontrado: {args.data}\n"
+            f"Rode antes: python -m training.prepare_data"
+        )
+
     df = pd.read_parquet(args.data).sort_values("valid")
     start = pd.Timestamp(args.start)
     end = start + pd.Timedelta(days=args.days)
@@ -63,7 +82,13 @@ def main() -> None:
     if period.empty:
         raise SystemExit(f"Nenhum dado entre {start.date()} e {end.date()}.")
 
+    if not args.no_update:
+        print("[aviso] esta execução vai sobrescrever models/model.pt "
+              "e adicionar entradas em models/registry.json.\n")
+
     if args.in_process:
+        # TestClient sobe a app em memória: útil para demonstrar o ciclo
+        # sem depender de um servidor rodando em outro terminal.
         from fastapi.testclient import TestClient
         from app.main import app as fastapi_app
         context = TestClient(fastapi_app)
@@ -85,6 +110,12 @@ def run(client, period: pd.DataFrame, start: pd.Timestamp, args) -> None:
             f"Ou rode com --in-process."
         )
 
+    if not health.get("model_loaded"):
+        raise SystemExit(
+            "A API subiu, mas sem modelo carregado. "
+            "Rode antes: python -m training.train_initial"
+        )
+
     print(f"API ok — modelo versão {health['model_version']}")
     print(f"Simulando {len(period):,} horas "
           f"({period['valid'].min().date()} -> {period['valid'].max().date()})\n")
@@ -101,6 +132,8 @@ def run(client, period: pd.DataFrame, start: pd.Timestamp, args) -> None:
         n_pred += 1
 
         # O rótulo verdadeiro só é conhecido depois; guarda para o lote.
+        # É o que torna a simulação realista: em produção nenhum sistema
+        # sabe se choveu no instante em que faz a previsão.
         buffer.append({"features": features, "target": int(row[TARGET])})
 
         if not args.no_update and row["valid"] >= next_update and buffer:
