@@ -1,10 +1,22 @@
 """Cálculo de métricas de classificação binária.
 
-A lógica vem do notebook original: em vez de guardar a métrica já
-calculada, guardamos a matriz de confusão. Isso permite reagregar
-depois por qualquer recorte (por ano, por cenário, acumulado) sem
-recalcular nada — e sem o erro de "média de F1s", que não é o F1 do
-conjunto.
+Decisão central deste módulo: em vez de guardar a métrica já calculada,
+guardamos a matriz de confusão. Isso permite reagregar depois por
+qualquer recorte (por ano, por cenário, acumulado) sem recalcular nada
+— e evita o erro de tirar "média de F1s", que não é o F1 do conjunto.
+
+Por que essa distinção importa: uma janela com 3 chuvas e outra com 90
+pesam igual em uma média simples. Somando os quadrantes e derivando o
+F1 no fim, cada observação pesa o que deve.
+
+Sobre a escolha da métrica principal: com ~5% de positivos, a acurácia
+sozinha não diz nada. Um modelo que responde "não vai chover" sempre
+acerta 95% das horas e tem recall zero — é inútil e parece ótimo. O F1
+combina precisão (dos alertas emitidos, quantos se confirmaram) e
+recall (das chuvas ocorridas, quantas foram previstas), e só é alto
+quando as duas são. A ROC-AUC mede coisa diferente: a capacidade de
+ordenar o risco, independente de qualquer limiar. Um modelo pode ter
+AUC alta e F1 baixo se o limiar estiver mal escolhido.
 """
 
 from __future__ import annotations
@@ -19,7 +31,7 @@ def confusion_summary(y_true: Sequence[float], y_pred: Sequence[float]) -> Dict[
 
     Args:
         y_true: Rótulos verdadeiros (0/1).
-        y_pred: Previsões binárias (0/1).
+        y_pred: Previsões binárias (0/1), já com o limiar aplicado.
 
     Returns:
         Dicionário com as chaves "tp", "tn", "fp" e "fn".
@@ -42,6 +54,12 @@ def compute_metrics(cm: Dict[str, int]) -> Dict[str, float]:
 
     Returns:
         Dicionário com "accuracy", "precision", "recall" e "f1".
+
+    Notes:
+        Os denominadores são checados um a um. Um lote de duas semanas
+        sem nenhuma chuva produz tp = fn = 0 e recall indefinido; aqui
+        vira 0.0 em vez de exceção, porque a agregação precisa
+        continuar rodando.
     """
     tp, tn, fp, fn = cm["tp"], cm["tn"], cm["fp"], cm["fn"]
     total = tp + tn + fp + fn
@@ -66,14 +84,17 @@ def roc_auc(y_true: Sequence[float], y_score: Sequence[float]) -> float:
     """Calcula a AUC-ROC pelo método dos postos (estatística de Mann-Whitney).
 
     Implementado à mão para não adicionar scikit-learn às dependências
-    da API, que precisa ser leve.
+    da API, que precisa ser leve. A equivalência é conhecida: a AUC é a
+    probabilidade de um positivo sorteado ao acaso receber score maior
+    que um negativo sorteado ao acaso.
 
     Args:
         y_true: Rótulos verdadeiros (0/1).
-        y_score: Probabilidades previstas.
+        y_score: Probabilidades previstas (não as decisões binárias).
 
     Returns:
-        A área sob a curva ROC. Devolve 0.5 se houver apenas uma classe.
+        A área sob a curva ROC. Devolve 0.5 se houver apenas uma classe,
+        que é o valor de um classificador aleatório.
     """
     y_true = np.asarray(y_true).astype(int)
     y_score = np.asarray(y_score, dtype=float)
@@ -83,7 +104,9 @@ def roc_auc(y_true: Sequence[float], y_score: Sequence[float]) -> float:
     if n_pos == 0 or n_neg == 0:
         return 0.5
 
-    # Postos médios, tratando empates.
+    # Postos médios, tratando empates. Sem esse tratamento, scores
+    # idênticos receberiam postos diferentes por ordem de chegada e a
+    # AUC ficaria dependente da ordenação do array.
     order = np.argsort(y_score)
     ranks = np.empty(len(y_score), dtype=float)
     ranks[order] = np.arange(1, len(y_score) + 1)
@@ -107,7 +130,7 @@ def evaluate(
     y_prob: Sequence[float],
     threshold: float,
 ) -> Dict[str, float]:
-    """Avalia um conjunto completo: métricas de limiar + AUC.
+    """Avalia um conjunto completo: métricas de limiar + AUC + matriz.
 
     Args:
         y_true: Rótulos verdadeiros.
@@ -115,7 +138,9 @@ def evaluate(
         threshold: Limiar de decisão.
 
     Returns:
-        Métricas de classificação, AUC e a matriz de confusão.
+        Métricas de classificação, ROC-AUC e os quatro quadrantes da
+        matriz de confusão, em um único dicionário plano. Os quadrantes
+        são inteiros; as demais chaves, floats arredondados.
     """
     y_prob = np.asarray(y_prob, dtype=float)
     y_pred = (y_prob >= threshold).astype(int)

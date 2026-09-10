@@ -13,6 +13,13 @@ rotulados novos, sem recriar a rede.
 Rodar localmente:
     uvicorn app.main:app --reload
     http://localhost:8000/docs
+
+Desenho do processo, em uma frase: o modelo é carregado uma vez, vive
+na memória deste processo e é alterado in-place pelo /update. É por
+isso que o serviço roda com --workers 1. Com vários workers, cada
+processo teria a sua própria cópia do checkpoint; um /update atingiria
+apenas um deles e os /predict seguintes responderiam com pesos
+diferentes dependendo de qual worker atendesse a requisição.
 """
 
 from __future__ import annotations
@@ -37,16 +44,45 @@ from app.schemas import (
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "models/model.pt"))
 DB_PATH = Path(os.getenv("DB_PATH", "data/monitoring.db"))
 
-# Estado do processo. O lock serializa as atualizações: `/update` altera
-# os pesos in-place, e duas atualizações simultâneas corromperiam o
-# estado do otimizador. Predições são leitura e não precisam do lock.
+# O caminho do registro NÃO é lido aqui de propósito: as funções de
+# `app/registry.py` resolvem `registry.REGISTRY_PATH` no momento da
+# chamada. Capturar o valor neste módulo impediria os testes de
+# redirecionar o registro para um diretório temporário.
+
+# ---------------------------------------------------------------- estado
+# O modelo é global do processo, carregado uma única vez no startup.
+# Carregar por requisição custaria a leitura do checkpoint e a
+# reconstrução do otimizador a cada /predict — e, pior, jogaria fora
+# qualquer atualização incremental feita em memória.
 _model: RainModel | None = None
+
+# O lock serializa as atualizações. `/update` altera os pesos e o estado
+# do otimizador in-place; duas atualizações concorrentes intercalariam
+# passos de gradiente e corromperiam as médias móveis do Adam.
+#
+# `/predict` NÃO adquire o lock, e isso é uma escolha, não um descuido.
+# Como os endpoints são síncronos, o Uvicorn os executa em um
+# threadpool, então uma predição pode ocorrer no meio de um
+# `optimizer.step()` e ler uma camada já atualizada junto com outra
+# ainda antiga. O resultado é uma probabilidade calculada sobre um
+# estado intermediário — não uma exceção nem corrupção de dados. A
+# janela é de milissegundos, a rede não tem dropout nem batchnorm, e
+# pagar um lock em todo /predict serializaria a leitura por causa de um
+# evento que acontece a cada duas semanas de dados simulados. O
+# trade-off foi aceito conscientemente.
 _lock = threading.Lock()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Carrega o modelo uma vez na subida do serviço."""
+    """Prepara o processo: cria o banco e carrega o modelo uma única vez.
+
+    Se o checkpoint não existir, o serviço sobe assim mesmo. É
+    deliberado: `/health` continua respondendo (útil para diagnosticar
+    um container recém-criado) e os endpoints que dependem do modelo
+    devolvem 503 com uma mensagem acionável, em vez de o container
+    entrar em crash loop e não deixar rastro nos logs.
+    """
     global _model
     storage.init_db(DB_PATH)
     if MODEL_PATH.exists():
@@ -70,7 +106,14 @@ app = FastAPI(
 
 
 def get_model() -> RainModel:
-    """Devolve o modelo carregado ou falha com 503."""
+    """Devolve o modelo carregado ou falha com 503.
+
+    503 (Service Unavailable) e não 500: não houve erro no
+    processamento da requisição, o serviço é que ainda não tem o que
+    precisa para atendê-la. É também o código que um balanceador
+    interpreta como "tente outra instância", que é o comportamento
+    desejado.
+    """
     if _model is None:
         raise HTTPException(
             status_code=503,
@@ -83,7 +126,14 @@ def get_model() -> RainModel:
 
 @app.get("/health", response_model=HealthResponse, tags=["infra"])
 def health() -> HealthResponse:
-    """Verificação de vida, usada pelo Docker e pelo serviço de deploy."""
+    """Verificação de vida, usada pelo Docker e pelo serviço de deploy.
+
+    Responde 200 mesmo sem modelo carregado, com `status="degraded"` e
+    `model_loaded=false`. O HEALTHCHECK do Docker confirma apenas que o
+    processo HTTP responde (liveness); saber se o modelo está pronto
+    (readiness) é responsabilidade de quem lê o JSON. Separar os dois
+    em `/health` e `/ready` está listado em próximos passos no README.
+    """
     return HealthResponse(
         status="ok" if _model is not None else "degraded",
         model_loaded=_model is not None,
@@ -99,7 +149,7 @@ def model_info() -> ModelInfo:
 
 @app.get("/versions", tags=["modelo"])
 def versions() -> Dict:
-    """Histórico de versões registradas."""
+    """Histórico de versões registradas em models/registry.json."""
     return {"current": registry.current(), "history": registry.history()}
 
 
@@ -109,8 +159,14 @@ def versions() -> Dict:
 def predict(features: WeatherFeatures) -> PredictResponse:
     """Prevê se vai chover na próxima hora.
 
-    Toda predição é registrada no SQLite, o que alimenta o `/metrics`
-    e o dashboard.
+    Toda predição é gravada no SQLite. Isso não é log por log: é o que
+    permite ao `/metrics` e ao dashboard mostrarem volume e
+    distribuição das probabilidades servidas. A distribuição é o único
+    sinal de monitoramento disponível antes de os rótulos verdadeiros
+    chegarem — e eles só chegam uma hora depois, no melhor caso.
+
+    A resposta separa `probability` (saída contínua do modelo) de
+    `prediction` (decisão binária depois do limiar). Ver PredictResponse.
     """
     model = get_model()
     values = features.to_list()
@@ -140,7 +196,8 @@ def predict(features: WeatherFeatures) -> PredictResponse:
 def update(request: UpdateRequest) -> UpdateResponse:
     """Atualiza o modelo incrementalmente com um lote rotulado.
 
-    A ordem das operações reproduz o protocolo do experimento offline:
+    A ordem das operações reproduz o protocolo prequencial do
+    experimento offline:
 
         1. o modelo prevê sobre o lote e o desempenho é registrado;
         2. só depois ele aprende com esses dados;
@@ -149,6 +206,15 @@ def update(request: UpdateRequest) -> UpdateResponse:
     Avaliar antes de aprender é o que torna a métrica honesta: medir
     depois do treino mostraria o modelo acertando dados que ele acabou
     de ver.
+
+    Sobre a versão: ela é incrementada a cada `incremental_fit`, e serve
+    para responder "qual estado dos pesos gerou esta predição". Como o
+    checkpoint é salvo sempre no MESMO caminho (models/model.pt), o
+    arquivo é sobrescrito e só o estado mais recente existe em disco. O
+    histórico de como se chegou até ele vive em models/registry.json e
+    na tabela `updates` do SQLite. É uma escolha de simplicidade:
+    guardar um .pt por versão exigiria política de retenção e não
+    acrescentaria nada à demonstração.
 
     Os pesos, o estado do otimizador e o scaler são preservados. A rede
     não é recriada.
@@ -165,6 +231,8 @@ def update(request: UpdateRequest) -> UpdateResponse:
         probs = model.predict_proba(X)
         cm = confusion_summary(y, (probs >= model.threshold).astype(int))
         metrics_before = compute_metrics(cm)
+        # A avaliação é atribuída à versão ANTERIOR, que é a que de fato
+        # produziu essas previsões.
         storage.log_evaluation(previous_version, cm, db_path=DB_PATH)
 
         # (2) aprendizado incremental
@@ -183,7 +251,12 @@ def update(request: UpdateRequest) -> UpdateResponse:
             stage="incremental_update",
             n_samples=len(X),
             metrics=metrics_before,
-            notes=f"Atualização via API com {len(X)} observações",
+            notes=(
+                f"Atualização via API com {len(X)} observações. "
+                f"As métricas desta entrada foram medidas no lote recebido "
+                f"ANTES do treino, ou seja, descrevem o desempenho da versão "
+                f"{previous_version} sobre esses dados."
+            ),
         )
 
     return UpdateResponse(
@@ -208,9 +281,15 @@ def metrics() -> Dict:
         - quantas atualizações o modelo já recebeu;
         - desempenho real, quando lotes rotulados chegaram via /update.
 
-    A distribuição das probabilidades é o sinal mais útil aqui: se ela
-    se deslocar em relação ao histórico, algo mudou nos dados de
-    entrada ou no modelo — sem precisar esperar pelos rótulos.
+    O campo `performance` é None até o primeiro /update. Isso não é
+    falha: sem rótulo verdadeiro não existe acerto ou erro a medir, e o
+    projeto prefere devolver None a inventar um número. É o problema
+    central de monitorar ML em produção — o feedback chega atrasado, e
+    aqui chega em lotes de duas semanas.
+
+    A distribuição das probabilidades é o sinal mais útil enquanto isso:
+    se ela se deslocar em relação ao histórico, algo mudou nos dados de
+    entrada ou no modelo, sem precisar esperar pelos rótulos.
     """
     model = get_model()
     return {
