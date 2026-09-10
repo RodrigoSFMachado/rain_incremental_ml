@@ -1,9 +1,17 @@
 # Imagem do dashboard de monitoramento.
 #
-# Separada da API de propósito: o dashboard precisa de pandas e
-# streamlit, a API não. Juntar os dois deixaria a imagem do serviço
-# desnecessariamente maior — e é o serviço que precisa caber no free
-# tier, não o dashboard.
+# Separada da API de propósito: a API não precisa de Streamlit, e o
+# dashboard não precisa de PyTorch. Separar evita levar o runtime
+# pesado de ML para a imagem de visualização — e é a imagem da API que
+# precisa caber no free tier.
+#
+# (Pandas aparece nas duas: a API o usa através de app/features.py, e
+# por isso ele está declarado também no requirements.txt.)
+#
+# As versões abaixo são fixadas à mão e repetem as do
+# requirements-train.txt. É duplicação consciente, para manter esta
+# imagem independente do arquivo de treino; se atualizar uma, atualize
+# a outra.
 
 FROM python:3.11-slim
 
@@ -20,11 +28,14 @@ ENV PYTHONUNBUFFERED=1 \
     DB_PATH=/app/data/monitoring.db \
     REGISTRY_PATH=/app/models/registry.json
 
+# Os diretórios existem para servir de ponto de montagem. No Compose
+# eles são sobrescritos pelos bind mounts, em modo somente leitura.
 RUN mkdir -p /app/data /app/models && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8501
 
+# Endpoint de saúde interno do Streamlit.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; \
         sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health').status==200 else 1)"

@@ -12,6 +12,15 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Código que não entra em nenhuma das duas imagens.
+# O Dockerfile da API copia apenas app/ e models/; o do dashboard,
+# apenas dashboard/. Excluir o resto reduz o contexto enviado ao
+# daemon do Docker.
+training/
+tests/
+notebooks/
+docs/
+
 # Dados brutos e intermediários de treino
 # O container da API recebe o checkpoint em models/, não precisa do dataset.
 data/*.csv
@@ -41,5 +50,6 @@ reports/
 .DS_Store
 Thumbs.db
 
-# Documentação e arquivos auxiliares não necessários no build da API/dashboard
+# Documentação e arquivos auxiliares não necessários no build
 README.md
+LICENSE

@@ -6,6 +6,10 @@
 # Instalação equivalente fora do Docker:
 #
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# pandas é dependência REAL de runtime, não só de treino: app/features.py
+# o importa, e app/schemas.py importa app/features. Removê-lo daqui
+# quebra a imagem da API com ModuleNotFoundError.
 
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
