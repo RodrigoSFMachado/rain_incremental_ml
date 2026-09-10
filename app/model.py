@@ -12,6 +12,16 @@ uma sessão e a próxima:
 Tudo isso vai para um único arquivo `.pt`, o que torna o checkpoint
 autocontido: quem carrega o arquivo não precisa de mais nada para
 prever ou continuar treinando.
+
+Vocabulário, porque os três termos são fáceis de confundir:
+
+    logit        saída crua da rede, em (-inf, +inf)
+    probability  sigmoid(logit), em [0, 1]
+    prediction   probability >= threshold, em {0, 1}
+
+`predict_proba` devolve a segunda; `predict` devolve a terceira. A API
+devolve as duas, mais o limiar usado, para que o cliente possa aplicar
+o próprio corte.
 """
 
 from __future__ import annotations
@@ -43,7 +53,16 @@ SEED: int = 42
 
 
 def set_seed(seed: int = SEED) -> None:
-    """Fixa as sementes para tornar o treino reprodutível."""
+    """Fixa as sementes para tornar o treino reprodutível.
+
+    Atenção ao escopo: `np.random.seed` e `torch.manual_seed` são
+    globais do processo, não do objeto. Como `RainModel.__init__`
+    chama esta função, instanciar ou carregar um modelo reinicia a
+    sequência aleatória de todo o programa. Em `training/experiment.py`
+    isso é visível: cada retrain reseta a semente e, com ela, a ordem
+    de embaralhamento dos lotes do cenário incremental. O efeito é
+    determinístico e reprodutível, mas não é local.
+    """
     np.random.seed(seed)
     torch.manual_seed(seed)
 
@@ -57,7 +76,8 @@ class MLP(nn.Module):
 
     A saída é o *logit*, não a probabilidade. O sigmoid é aplicado
     apenas na inferência. Isso permite usar `BCEWithLogitsLoss`, que
-    combina sigmoid e log de forma numericamente estável.
+    combina sigmoid e log de forma numericamente estável — aplicar os
+    dois separadamente perde precisão quando o logit é grande.
     """
 
     def __init__(self, n_features: int, hidden: int = HIDDEN_SIZE) -> None:
@@ -80,14 +100,15 @@ class MLP(nn.Module):
 class FrozenScaler:
     """Padronização com estatísticas fixas.
 
-    Diferente do `StandardScaler` adaptativo do River, este scaler é
-    calculado uma única vez no treino inicial e nunca mais muda.
+    Diferente de um scaler adaptativo, este é calculado uma única vez
+    no treino inicial e nunca mais muda.
 
     O motivo é direto: os pesos da rede foram aprendidos em um espaço
     de features com determinada média e escala. Se as estatísticas de
     normalização mudarem, esse espaço muda junto e os pesos existentes
     deixam de ser válidos. Congelar o scaler é o que permite continuar
-    o treinamento em vez de recomeçar.
+    o treinamento em vez de recomeçar — é a armadilha número um do
+    aprendizado incremental com rede neural.
     """
 
     mean: np.ndarray = field(default_factory=lambda: np.zeros(1))
@@ -118,6 +139,9 @@ class RainModel:
         threshold: Limiar de decisão calibrado em validação.
         version: Incrementa a cada atualização incremental.
         n_updates: Quantidade de chamadas a `incremental_fit`.
+        n_samples_seen: Amostras usadas em TREINO ao longo da vida do
+            modelo (fit + todos os incremental_fit). Não conta predições
+            servidas — esse número vive no SQLite, em `predictions`.
     """
 
     def __init__(
@@ -151,9 +175,13 @@ class RainModel:
     def _loss_fn(self) -> nn.Module:
         """Loss com peso na classe positiva, para lidar com o desbalanceamento.
 
+        Com cerca de 5% de positivos, sem `pos_weight` o gradiente é
+        dominado pelos negativos e a rede converge para "nunca chove".
+
         `pos_weight` é calculado no treino inicial e reutilizado nas
         atualizações. Recalculá-lo a partir de um lote pequeno seria
-        instável: um lote sem nenhum positivo produziria um peso infinito.
+        instável: um lote sem nenhum positivo produziria um peso
+        infinito.
         """
         return nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor(self.pos_weight, dtype=torch.float32)
@@ -168,7 +196,12 @@ class RainModel:
         lr: float,
         shuffle: bool = True,
     ) -> float:
-        """Laço de treino compartilhado por `fit` e `incremental_fit`."""
+        """Laço de treino compartilhado por `fit` e `incremental_fit`.
+
+        Ser o mesmo laço nos dois casos é o ponto: aprendizado
+        incremental não é um algoritmo diferente, é o mesmo passo de
+        gradiente aplicado sobre um estado preservado.
+        """
         for group in self.optimizer.param_groups:
             group["lr"] = lr
 
@@ -206,8 +239,9 @@ class RainModel:
     ) -> float:
         """Treino inicial, do zero.
 
-        Ajusta o scaler, calcula o peso da classe positiva e treina a
-        rede. Só deve ser chamado uma vez, na criação do modelo.
+        Faz três coisas que o `incremental_fit` nunca faz: ajusta o
+        scaler, calcula o peso da classe positiva e treina por muitas
+        épocas. Só deve ser chamado uma vez, na criação do modelo.
 
         Args:
             X: Matriz de features, na ordem de `self.feature_names`.
@@ -252,12 +286,13 @@ class RainModel:
             - não recria a rede;
             - não reinicializa os pesos;
             - não recria o otimizador (o estado do Adam é preservado);
-            - não recalcula o scaler.
+            - não recalcula o scaler;
+            - não recalibra o limiar.
 
         A rede segue exatamente de onde parou. As únicas diferenças em
-        relação ao `fit` são a taxa de aprendizado, dez vezes menor, e
-        o número reduzido de épocas — ambas para evitar que o lote novo
-        sobrescreva o que o modelo já aprendia antes.
+        relação ao `fit` são a taxa de aprendizado, dez vezes menor
+        (1e-4 contra 1e-3), e o número reduzido de épocas — ambas para
+        evitar que o lote novo sobrescreva o que o modelo já sabia.
 
         Args:
             X: Features das novas observações rotuladas.
@@ -272,6 +307,9 @@ class RainModel:
         Raises:
             RuntimeError: Se o modelo ainda não passou por `fit`.
         """
+        # O scaler nunca ajustado ainda tem shape (1,), o default do
+        # dataclass. É o sinal de que `fit` não rodou — e treinar sem
+        # scaler produziria pesos em uma escala que nada mais reconhece.
         if self.scaler.mean.shape[0] != len(self.feature_names):
             raise RuntimeError(
                 "O modelo precisa passar por fit() antes de atualizações "
@@ -297,7 +335,13 @@ class RainModel:
 
     @torch.no_grad()
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Devolve a probabilidade da classe positiva."""
+        """Devolve a probabilidade da classe positiva, em [0, 1].
+
+        Atenção: com `pos_weight` alto, essas probabilidades não são
+        calibradas em sentido absoluto. 0,84 não significa 84% de chance
+        de chover. Elas ordenam bem o risco (é o que a ROC-AUC mede),
+        mas para leitura direta seria preciso uma calibração posterior.
+        """
         self.net.eval()
         logits = self.net(self._to_tensor(X))
         return torch.sigmoid(logits).numpy()
@@ -315,14 +359,21 @@ class RainModel:
     ) -> float:
         """Escolhe o limiar que maximiza o F1 em um conjunto de validação.
 
-        Importante: deve ser chamado com dados de validação, nunca com
-        os dados de teste. Escolher o limiar olhando o teste infla o
-        resultado final.
+        Importante: deve ser chamado com dados de VALIDAÇÃO, nunca com
+        os dados de teste. O limiar é um parâmetro ajustado; escolhê-lo
+        olhando o teste transforma o teste em treino e infla o
+        resultado final, que deixa de estimar desempenho em dados
+        nunca vistos.
+
+        Por que 0,5 não serve como limiar fixo aqui: com 5% de
+        positivos e `pos_weight` alto, a distribuição de probabilidades
+        não é centrada, e 0,5 não é um corte natural. O valor calibrado
+        neste projeto ficou em torno de 0,84.
 
         Args:
             X: Features de validação.
             y: Rótulos de validação.
-            grid: Limiares a testar. Padrão: 0.05 a 0.95, passo 0.01.
+            grid: Limiares a testar. Padrão: 0.05 a 0.94, passo 0.01.
 
         Returns:
             O limiar escolhido, já gravado em `self.threshold`.
@@ -346,7 +397,15 @@ class RainModel:
     # ------------------------------------------------------- persistência
 
     def save(self, path: str | Path) -> Path:
-        """Salva o checkpoint completo em um único arquivo `.pt`."""
+        """Salva o checkpoint completo em um único arquivo `.pt`.
+
+        "Checkpoint" aqui é mais do que os pesos: é todo o estado
+        necessário para reconstruir o modelo e continuar treinando.
+        Salvar apenas `state_dict()` da rede, como muitos tutoriais
+        fazem, bastaria para prever, mas perderia o otimizador, o
+        scaler e o limiar — e o aprendizado incremental deixaria de
+        funcionar corretamente.
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -376,7 +435,14 @@ class RainModel:
         Restaura também o estado do otimizador. Sem isso, o Adam
         recomeçaria com as médias móveis zeradas e os primeiros passos
         após o reload seriam erráticos — o modelo pioraria logo depois
-        de ser carregado, sem motivo aparente.
+        de ser carregado, sem motivo aparente. É um bug silencioso, e é
+        a razão de o checkpoint guardar `optimizer_state_dict`.
+
+        Segurança: `weights_only=False` é necessário porque o
+        checkpoint contém arrays numpy e listas Python além dos
+        tensores. Isso significa que o arquivo é desserializado com
+        pickle, então só carregue `.pt` que você mesmo produziu. Nunca
+        aponte este método para um checkpoint recebido de terceiros.
         """
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
 
