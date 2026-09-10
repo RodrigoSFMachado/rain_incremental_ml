@@ -60,4 +60,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # Um único worker, de propósito: o modelo vive na memória do processo e
 # é alterado in-place pelo /update. Com vários workers, cada um teria a
 # sua cópia e as atualizações divergiriam entre eles.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
