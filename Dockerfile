@@ -40,6 +40,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     MODEL_PATH=/app/models/model.pt \
     DB_PATH=/app/data/monitoring.db
 
+# Só o que a API usa em runtime. training/ e tests/ ficam de fora:
+# a imagem do serviço não precisa deles.
 COPY app/ ./app/
 COPY models/ ./models/
 
@@ -53,6 +55,16 @@ EXPOSE 8000
 
 # O healthcheck usa o próprio /health da API. Sem curl na imagem, então
 # vai por urllib mesmo.
+#
+# Ele confirma LIVENESS: o processo HTTP está respondendo. Não confirma
+# readiness — /health devolve 200 mesmo com o modelo ausente, com
+# "status": "degraded" e "model_loaded": false no corpo. Ver a nota
+# sobre liveness x readiness no README.
+#
+# A porta está fixa em 8000 porque é a que o EXPOSE e o Docker Compose
+# usam. Em plataformas que injetam $PORT com outro valor (Render, por
+# exemplo), o healthcheck do Dockerfile não é usado: lá vale o
+# healthCheckPath declarado no render.yaml.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; \
         sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
@@ -60,4 +72,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # Um único worker, de propósito: o modelo vive na memória do processo e
 # é alterado in-place pelo /update. Com vários workers, cada um teria a
 # sua cópia e as atualizações divergiriam entre eles.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

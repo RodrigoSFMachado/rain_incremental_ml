@@ -1,12 +1,27 @@
-"""Constantes do domínio, compartilhadas por treino e serving.
+"""Constantes de domínio compartilhadas por treino, API e simulação.
 
-Este módulo existe separado de `features.py` por um motivo prático: a
-API precisa conhecer o contrato das features (nomes e ordem), mas não
-precisa do pandas, que só é usado na preparação dos dados.
+Este módulo é a **fonte única** dos nomes e da ordem das 16 features.
+`app/features.py`, `app/model.py`, `app/schemas.py` e os scripts de
+`training/` derivam tudo daqui — nenhum deles redeclara a lista.
 
-Mantendo as constantes aqui, a imagem Docker da API não carrega pandas
-nem pyarrow. São cerca de 50 MB de RAM a menos no processo — o que
-importa quando o alvo é um contêiner de 512 MB.
+Por que uma fonte única importa aqui mais do que de costume:
+
+A ordem das features é um contrato implícito entre três lugares — o
+scaler congelado, a primeira camada da rede e o corpo JSON do
+`/predict`. Se duas cópias da lista divergirem, a API continua
+aceitando a requisição (os campos são nomeados e todos existem),
+monta o vetor na ordem errada, normaliza cada valor pela média e pelo
+desvio de outra coluna e devolve uma probabilidade plausível.
+
+Não há exceção, não há log, o teste continua verde. Manter uma lista
+só elimina a classe inteira de bug.
+
+Nota sobre dependências: este módulo não importa pandas, então quem
+precisa apenas do contrato das features paga menos por isso aqui. Mas
+isso não torna a API livre de pandas — `app/features.py` o importa e é
+carregado em runtime através do `app/schemas.py`. Por esse motivo
+pandas está declarado em `requirements.txt`, e não apenas no
+`requirements-train.txt`.
 """
 
 from __future__ import annotations
@@ -14,17 +29,21 @@ from __future__ import annotations
 from typing import List
 
 STATION: str = "MIA"
+
+# Coluna bruta do CSV ASOS com a precipitação acumulada na hora, em polegadas.
 TARGET_RAW: str = "p01i"
+
+# Coluna derivada pelo pipeline: choveu na hora SEGUINTE (0/1).
 TARGET: str = "rain_next_hour"
 
 # Limiar em polegadas para considerar que houve chuva na hora.
+# 0.01" é o menor valor mensurável do ASOS; abaixo disso o relatório
+# traz "T" (trace), tratado como 0.00 na limpeza.
 RAIN_THRESHOLD_INCHES: float = 0.01
 
-# Ordem canônica das features do modelo.
-#
-# A ordem importa: o scaler e a primeira camada da rede dependem dela.
-# Tanto o treino quanto a API derivam a ordem desta lista, então as
-# duas nunca divergem.
+# Ordem canônica das features do modelo. NÃO reordene nem insira no
+# meio: um checkpoint já treinado deixaria de ser compatível, porque o
+# scaler e os pesos da primeira camada foram aprendidos nesta ordem.
 FEATURE_NAMES: List[str] = [
     "tmpf",            # temperatura (F)
     "dwpf",            # ponto de orvalho (F)
@@ -46,7 +65,8 @@ FEATURE_NAMES: List[str] = [
 
 N_FEATURES: int = len(FEATURE_NAMES)
 
-# Colunas brutas lidas do CSV ASOS.
+# Colunas brutas lidas do CSV ASOS, na ordem em que o pipeline as usa.
+# Correspondem às variáveis selecionadas no download do IEM (ver README).
 RAW_COLUMNS: List[str] = [
     "station", "valid", "tmpf", "dwpf", "relh",
     "drct", "sknt", "p01i", "mslp", "vsby",

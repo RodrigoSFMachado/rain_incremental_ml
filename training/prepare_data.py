@@ -1,12 +1,16 @@
 """Transforma o CSV bruto do ASOS no dataset pronto para modelagem.
 
+O CSV é baixado manualmente da interface do Iowa Environmental Mesonet
+(ASOS/AWOS/METAR). Os parâmetros exatos do download estão no README, na
+seção "Dados". O pipeline espera o arquivo em `data/MIA_2012_2025.csv`;
+outro nome exige passar `--input`.
+
 Uso:
     python -m training.prepare_data \
         --input data/MIA_2012_2025.csv \
         --output data/dataset.parquet \
         --start-year 2021
 """
-
 
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.features import FEATURE_NAMES, TARGET, clean_asos, build_features
+from app.features import FEATURE_NAMES, TARGET, build_features, clean_asos
 
 
 def main() -> None:
@@ -30,6 +34,13 @@ def main() -> None:
         help="Mantém apenas observações a partir deste ano.",
     )
     args = parser.parse_args()
+
+    if not Path(args.input).exists():
+        raise SystemExit(
+            f"Arquivo não encontrado: {args.input}\n"
+            f"Baixe o CSV do IEM conforme a seção 'Dados' do README e "
+            f"salve nesse caminho, ou informe outro com --input."
+        )
 
     print(f"Lendo {args.input} ...")
     raw = pd.read_csv(args.input, low_memory=False)
@@ -48,6 +59,8 @@ def main() -> None:
     df.to_parquet(args.output, index=False)
 
     # ---------------- relatório de qualidade ----------------
+    # Conferir esses números antes de treinar evita descobrir um
+    # problema de dados depois, disfarçado de modelo ruim.
     print("\n" + "=" * 62)
     print("RELATÓRIO DO DATASET")
     print("=" * 62)

@@ -6,6 +6,10 @@ agregações do endpoint `/metrics` e é lido diretamente pelo dashboard.
 Prometheus + Grafana resolveriam o mesmo problema com dois containers
 a mais e uma linguagem de consulta nova.
 
+Limite conhecido: SQLite serializa escritas e é adequado para
+demonstração local e baixa concorrência. Com várias instâncias
+escrevendo ao mesmo tempo, a escolha seria outra.
+
 Três tabelas:
 
     predictions   toda predição servida (para volume e distribuição)
@@ -21,6 +25,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
+
+from app.metrics import compute_metrics
 
 DB_PATH = Path("data/monitoring.db")
 
@@ -63,7 +69,13 @@ def _now() -> str:
 
 @contextmanager
 def connect(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
-    """Abre a conexão, garante o schema e faz commit ao sair."""
+    """Abre a conexão, garante o schema e faz commit ao sair.
+
+    O `executescript(SCHEMA)` roda em toda conexão. Todos os comandos
+    são `IF NOT EXISTS`, então é idempotente e barato. A vantagem é que
+    qualquer ponto de entrada — a API, um teste, um script — encontra o
+    banco pronto sem precisar lembrar de inicializar antes.
+    """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10)
@@ -77,6 +89,7 @@ def connect(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
 
 
 def init_db(db_path: Path = DB_PATH) -> None:
+    """Cria o arquivo e as tabelas. Chamado no startup da API."""
     with connect(db_path):
         pass
 
@@ -93,7 +106,12 @@ def log_prediction(
     features: List[float],
     db_path: Path = DB_PATH,
 ) -> int:
-    """Registra uma predição servida e devolve o id gerado."""
+    """Registra uma predição servida e devolve o id gerado.
+
+    As features vão como JSON em uma coluna de texto. Não é normalizado
+    de propósito: elas nunca são consultadas por campo, apenas lidas
+    inteiras quando se quer reconstituir uma predição específica.
+    """
     with connect(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO predictions "
@@ -109,6 +127,7 @@ def log_update(
     from_version: int, to_version: int, n_samples: int, loss: float,
     db_path: Path = DB_PATH,
 ) -> None:
+    """Registra uma atualização incremental: de qual versão para qual."""
     with connect(db_path) as conn:
         conn.execute(
             "INSERT INTO updates (created_at, from_version, to_version, n_samples, loss) "
@@ -120,7 +139,15 @@ def log_update(
 def log_evaluation(
     model_version: int, cm: Dict[str, int], db_path: Path = DB_PATH,
 ) -> None:
-    """Registra o desempenho medido em um lote rotulado."""
+    """Registra o desempenho medido em um lote rotulado.
+
+    Guarda a matriz de confusão, não o F1 já calculado. Isso permite
+    reagregar depois por qualquer recorte sem recalcular nada — e evita
+    o erro de tirar média de F1, que não é o F1 do conjunto.
+
+    `model_version` é a versão que PRODUZIU as previsões avaliadas, ou
+    seja, a versão anterior à atualização que este lote disparou.
+    """
     with connect(db_path) as conn:
         conn.execute(
             "INSERT INTO evaluations "
@@ -156,20 +183,28 @@ def prediction_stats(db_path: Path = DB_PATH) -> Dict:
             "FROM predictions GROUP BY b ORDER BY b"
         ).fetchall()
 
-        return {
-            "total": total,
-            "positive_rate": round((row["n_pos"] or 0) / total, 4),
-            "mean_probability": round(row["mean_prob"], 4),
-            "histogram": {
-                f"{min(r['b'], 9) / 10:.1f}-{(min(r['b'], 9) + 1) / 10:.1f}": r["c"]
-                for r in bins
-            },
-            "first_at": row["first"],
-            "last_at": row["last"],
-        }
+    # Uma probabilidade exatamente igual a 1.0 produz b = 10, que não é
+    # uma faixa: pertence à última, 0.9-1.0. O acúmulo é feito em
+    # Python porque um dict comprehension descartaria silenciosamente
+    # uma das duas contagens ao gerar a mesma chave duas vezes.
+    histogram: Dict[str, int] = {}
+    for r in bins:
+        b = min(int(r["b"]), 9)
+        key = f"{b / 10:.1f}-{(b + 1) / 10:.1f}"
+        histogram[key] = histogram.get(key, 0) + int(r["c"])
+
+    return {
+        "total": total,
+        "positive_rate": round((row["n_pos"] or 0) / total, 4),
+        "mean_probability": round(row["mean_prob"], 4),
+        "histogram": histogram,
+        "first_at": row["first"],
+        "last_at": row["last"],
+    }
 
 
 def update_stats(db_path: Path = DB_PATH) -> Dict:
+    """Quantas atualizações houve e quantas amostras foram aprendidas."""
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT COUNT(*) n, SUM(n_samples) samples, MAX(created_at) last "
@@ -185,7 +220,10 @@ def update_stats(db_path: Path = DB_PATH) -> Dict:
 def performance_stats(db_path: Path = DB_PATH) -> Optional[Dict]:
     """Desempenho acumulado, somando as matrizes de confusão registradas.
 
-    Só existe se algum lote rotulado já tiver chegado via `/update`.
+    Devolve None enquanto nenhum lote rotulado tiver chegado via
+    `/update`. Não há como medir acerto sem rótulo verdadeiro, e
+    devolver zeros seria pior do que devolver None: pareceria um modelo
+    com desempenho nulo, e não ausência de medição.
     """
     with connect(db_path) as conn:
         row = conn.execute(
@@ -196,14 +234,13 @@ def performance_stats(db_path: Path = DB_PATH) -> Optional[Dict]:
     if not row["n"]:
         return None
 
-    from app.metrics import compute_metrics
-
     cm = {k: int(row[k]) for k in ("tp", "tn", "fp", "fn")}
     return {**compute_metrics(cm), **cm,
             "n_labeled": int(row["n"]), "n_batches": int(row["batches"])}
 
 
 def recent_predictions(limit: int = 200, db_path: Path = DB_PATH) -> List[Dict]:
+    """Últimas predições servidas, da mais recente para a mais antiga."""
     with connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, created_at, model_version, probability, prediction "

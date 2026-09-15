@@ -1,0 +1,51 @@
+# Controle de versão e metadados locais
+.git/
+.gitignore
+.gitattributes
+
+# Ambiente Python local e caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Código que não entra em nenhuma das duas imagens.
+# O Dockerfile da API copia apenas app/ e models/; o do dashboard,
+# apenas dashboard/. Excluir o resto reduz o contexto enviado ao
+# daemon do Docker.
+training/
+tests/
+docs/
+
+# Dados brutos e intermediários de treino
+# O container da API recebe o checkpoint em models/, não precisa do dataset.
+data/*.csv
+data/*.parquet
+
+# Estado operacional e backups locais
+# Em Docker Compose, data/ e models/ são montados como volumes em runtime.
+data/*.db
+data/*_before_simulation.db
+models/*_before_simulation.pt
+models/*_before_simulation.json
+models/model_hidden32.pt
+
+# Rastreamento local de experimentos
+mlflow.db
+mlartifacts/
+mlruns/
+
+# Arquivos de editor e sistema operacional
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentação e arquivos auxiliares não necessários no build
+README.md
+LICENSE

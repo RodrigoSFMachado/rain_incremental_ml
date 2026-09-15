@@ -1,21 +1,33 @@
 # Deploy no Render (free tier).
 #
+# STATUS: configuração preparada, mas AINDA NÃO validada por um deploy
+# real em nuvem. O que foi validado até aqui é a execução local via
+# Docker Compose. Trate este arquivo como próximo passo, não como
+# ambiente em funcionamento.
+#
 # Uso: no painel do Render, "New > Blueprint" e apontar para o repositório.
 #
-# Duas limitações do plano gratuito que valem conhecer antes:
+# Escopo: apenas a API. O dashboard não é publicado por este blueprint.
+#
+# Três limitações do plano gratuito que valem conhecer antes:
 #
 # 1. O serviço hiberna após 15 minutos sem tráfego. A primeira
 #    requisição depois disso leva até um minuto para responder.
 #
-# 2. O disco é efêmero. O modelo atualizado via /update volta ao estado
-#    do commit a cada restart. Para persistir de verdade seria preciso
-#    um volume pago ou armazenamento externo — o que está fora do
-#    escopo deste projeto e documentado no README.
+# 2. O disco é efêmero. O modelo atualizado via /update, o
+#    registry.json e o monitoring.db voltam ao estado da imagem a cada
+#    restart ou deploy. Na nuvem, /update funciona como demonstração do
+#    ciclo, não como persistência durável de aprendizado. Para persistir
+#    de verdade seria preciso um volume pago ou armazenamento externo —
+#    fora do escopo deste projeto, e documentado no README.
 #
-# O plano gratuito tem 512 MB de RAM. O import do torch consome cerca
-# de 250 MB, então a imagem precisa obrigatoriamente usar o torch
-# CPU-only (já configurado no Dockerfile). A versão do PyPI, com as
-# bibliotecas CUDA, não cabe.
+# 3. O plano gratuito tem 512 MB de RAM. O import do torch consome
+#    cerca de 250 MB, então a imagem precisa obrigatoriamente usar o
+#    torch CPU-only (já configurado no Dockerfile). A versão do PyPI,
+#    com as bibliotecas CUDA, não cabe.
+#
+# A porta é injetada pela plataforma na variável PORT; o CMD do
+# Dockerfile a usa com fallback para 8000 no ambiente local.
 
 services:
   - type: web
@@ -30,3 +42,5 @@ services:
         value: /app/models/model.pt
       - key: DB_PATH
         value: /app/data/monitoring.db
+      - key: REGISTRY_PATH
+        value: /app/models/registry.json
