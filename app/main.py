@@ -196,8 +196,8 @@ def predict(features: WeatherFeatures) -> PredictResponse:
 def update(request: UpdateRequest) -> UpdateResponse:
     """Atualiza o modelo incrementalmente com um lote rotulado.
 
-    A ordem das operações reproduz o protocolo prequencial do
-    experimento offline:
+    A ordem das operações segue o protocolo prequencial — prever
+    primeiro, aprender depois:
 
         1. o modelo prevê sobre o lote e o desempenho é registrado;
         2. só depois ele aprende com esses dados;

@@ -58,10 +58,9 @@ def set_seed(seed: int = SEED) -> None:
     Atenção ao escopo: `np.random.seed` e `torch.manual_seed` são
     globais do processo, não do objeto. Como `RainModel.__init__`
     chama esta função, instanciar ou carregar um modelo reinicia a
-    sequência aleatória de todo o programa. Em `training/experiment.py`
-    isso é visível: cada retrain reseta a semente e, com ela, a ordem
-    de embaralhamento dos lotes do cenário incremental. O efeito é
-    determinístico e reprodutível, mas não é local.
+    sequência aleatória de todo o programa — inclusive a ordem de
+    embaralhamento dos lotes em treinos posteriores. O efeito é
+    determinístico e reprodutível, mas não é local ao objeto.
     """
     np.random.seed(seed)
     torch.manual_seed(seed)

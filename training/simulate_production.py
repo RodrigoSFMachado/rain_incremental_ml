@@ -1,9 +1,13 @@
 """Simula o uso do serviço em produção, replayando dados reais.
 
 Percorre um período do dataset hora a hora, chamando `/predict` como um
-cliente faria, e a cada N dias envia o lote rotulado para `/update` —
-reproduzindo o atraso real com que os rótulos ficam disponíveis: só se
-sabe se choveu depois que a hora passou.
+cliente faria, e a cada N dias envia o lote rotulado acumulado para
+`/update` — reproduzindo o atraso real com que os rótulos ficam
+disponíveis: só se sabe se choveu depois que a hora passou.
+
+O intervalo padrão é de 30 dias corridos (`pd.Timedelta(days=30)`), não
+de mês-calendário: o lote fecha 30 dias após o anterior, qualquer que
+seja o dia do mês.
 
 Serve para dois propósitos: popular o banco de monitoramento com dados
 realistas para o dashboard, e demonstrar o ciclo completo do sistema.
@@ -24,7 +28,11 @@ Uso:
     python -m training.simulate_production --days 120
 
     # ou sem subir servidor nenhum:
-    python -m training.simulate_production --days 120 --in-process
+    python -m training.simulate_production --days 730 --in-process
+
+    # intervalo de atualização diferente do padrão:
+    python -m training.simulate_production \
+        --start 2024-01-01 --days 730 --update-every-days 30 --in-process
 """
 
 from __future__ import annotations
@@ -40,7 +48,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.constants import FEATURE_NAMES, TARGET
 
-UPDATE_EVERY_DAYS = 14
+# Intervalo padrão entre atualizações, em dias corridos. Configurável
+# por --update-every-days: é o parâmetro que controla com que
+# frequência o modelo aprende com os rótulos que chegaram.
+DEFAULT_UPDATE_EVERY_DAYS = 30
 
 
 def to_payload(row: pd.Series) -> dict:
@@ -59,6 +70,13 @@ def main() -> None:
     parser.add_argument("--start", default="2025-06-01")
     parser.add_argument("--days", type=int, default=120)
     parser.add_argument(
+        "--update-every-days", type=int, default=DEFAULT_UPDATE_EVERY_DAYS,
+        help=(
+            f"Dias corridos entre cada /update. "
+            f"Padrão: {DEFAULT_UPDATE_EVERY_DAYS}."
+        ),
+    )
+    parser.add_argument(
         "--no-update", action="store_true",
         help="Só faz predições, sem atualizar o modelo.",
     )
@@ -67,6 +85,9 @@ def main() -> None:
         help="Roda a API no mesmo processo, sem precisar de servidor.",
     )
     args = parser.parse_args()
+
+    if args.update_every_days < 1:
+        parser.error("--update-every-days deve ser maior ou igual a 1.")
 
     if not Path(args.data).exists():
         raise SystemExit(
@@ -118,10 +139,14 @@ def run(client, period: pd.DataFrame, start: pd.Timestamp, args) -> None:
 
     print(f"API ok — modelo versão {health['model_version']}")
     print(f"Simulando {len(period):,} horas "
-          f"({period['valid'].min().date()} -> {period['valid'].max().date()})\n")
+          f"({period['valid'].min().date()} -> {period['valid'].max().date()})")
+    if not args.no_update:
+        print(f"Atualização incremental a cada {args.update_every_days} dias\n")
+    else:
+        print("Sem atualização incremental (--no-update)\n")
 
     buffer: list[dict] = []
-    next_update = start + pd.Timedelta(days=UPDATE_EVERY_DAYS)
+    next_update = start + pd.Timedelta(days=args.update_every_days)
     n_pred = 0
 
     for _, row in period.iterrows():
@@ -145,7 +170,7 @@ def run(client, period: pd.DataFrame, start: pd.Timestamp, args) -> None:
                 f"F1 no lote: {before['f1']:.3f}"
             )
             buffer.clear()
-            next_update += pd.Timedelta(days=UPDATE_EVERY_DAYS)
+            next_update += pd.Timedelta(days=args.update_every_days)
 
     metrics = client.get("/metrics").json()
     print(f"\n{n_pred:,} predições servidas")

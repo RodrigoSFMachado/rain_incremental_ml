@@ -131,15 +131,57 @@ else:
     # descreve o desempenho da versão indicada no eixo x sobre dados
     # que ela ainda não tinha visto.
     evaluations = evaluations.sort_values("created_at").copy()
-    p = evaluations["tp"] / (evaluations["tp"] + evaluations["fp"]).replace(0, pd.NA)
-    r = evaluations["tp"] / (evaluations["tp"] + evaluations["fn"]).replace(0, pd.NA)
-    evaluations["f1"] = (2 * p * r / (p + r)).fillna(0.0)
+
+    for column in ("tp", "tn", "fp", "fn"):
+        evaluations[column] = pd.to_numeric(
+            evaluations[column],
+            errors="coerce",
+        ).fillna(0)
+
+    evaluations["actual_positives"] = (
+        evaluations["tp"] + evaluations["fn"]
+    )
+
+    evaluations["predicted_positives"] = (
+        evaluations["tp"] + evaluations["fp"]
+    )
+
+    p_denominator = evaluations["predicted_positives"]
+    r_denominator = evaluations["actual_positives"]
+
+    precision_by_batch = evaluations["tp"].div(
+        p_denominator.replace(0, pd.NA)
+    )
+
+    recall_by_batch = evaluations["tp"].div(
+        r_denominator.replace(0, pd.NA)
+    )
+
+    f1_denominator = precision_by_batch + recall_by_batch
+
+    evaluations["f1"] = (
+        2 * precision_by_batch * recall_by_batch
+    ).div(
+        f1_denominator.where(f1_denominator.ne(0))
+    )
+
+    # F1 só é avaliável se o lote tiver chuva observada ou previsão positiva.
+    # Quando ambos são zero, não houve evento positivo para avaliar:
+    # mantemos NaN para criar uma lacuna no gráfico, em vez de mostrar F1 = 0.
+    evaluations["f1_evaluable"] = (
+        evaluations["actual_positives"].gt(0)
+        | evaluations["predicted_positives"].gt(0)
+    )
+
+    evaluations.loc[
+        ~evaluations["f1_evaluable"],
+        "f1",
+    ] = pd.NA
 
     st.caption(
-        "F1 por lote avaliado — cada ponto é medido antes da atualização "
-        "correspondente. Lotes pequenos oscilam muito: duas semanas sem "
-        "chuva produzem F1 igual a zero por ausência de positivos, não "
-        "por falha do modelo."
+    "F1 por lote avaliado — cada ponto é medido antes da atualização "
+    "correspondente. Lacunas indicam lotes sem chuva observada e sem "
+    "previsões positivas; nesses casos, F1 não é aplicável."
     )
     st.line_chart(
         evaluations.set_index("model_version")["f1"],

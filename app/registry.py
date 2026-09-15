@@ -10,14 +10,14 @@ precisamos saber é: qual é a versão atual, quando foi criada, com
 quantas amostras e com que desempenho.
 
 Um JSON responde a isso em poucas linhas e continua legível por
-humanos. O MLflow segue sendo usado para *tracking de experimentos*
-offline, que é onde ele agrega de verdade.
+humanos. O MLflow segue sendo usado para *tracking* do treinamento
+inicial (offline), que é onde ele agrega de verdade.
 
 Divisão de responsabilidades no projeto:
 
     models/registry.json   histórico operacional local (este módulo)
     data/monitoring.db     eventos de runtime: predições e avaliações
-    mlflow.db              experimentos offline (params, métricas, artefatos)
+    mlflow.db              runs do treino inicial (params, métricas, artefatos)
 
 Semântica do campo `metrics` (importante ao ler o JSON direto):
 

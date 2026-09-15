@@ -18,7 +18,6 @@ __pycache__/
 # daemon do Docker.
 training/
 tests/
-notebooks/
 docs/
 
 # Dados brutos e intermediários de treino
@@ -38,9 +37,6 @@ models/model_hidden32.pt
 mlflow.db
 mlartifacts/
 mlruns/
-
-# Saídas de análises e relatórios
-reports/
 
 # Arquivos de editor e sistema operacional
 .vscode/

@@ -20,8 +20,8 @@ data/*.sqlite3
 # ═══════════════════════════════════════════════════════════════
 # MLflow
 # ═══════════════════════════════════════════════════════════════
-# Histórico de experimentos é local e pessoal. As métricas que
-# importam já estão no README e em reports/.
+# Histórico de runs é local e pessoal. As métricas que importam já
+# estão no README.
 mlflow.db
 mlruns/
 mlartifacts/
@@ -33,7 +33,6 @@ mlartifacts/
 # models/model.pt  -> 9,6 KB, e o Dockerfile faz COPY models/.
 #                     Se for ignorado, o build da imagem quebra.
 # models/registry.json
-# reports/*.png    -> o README exibe esses gráficos.
 #
 # Contraintuitivo, porque .pt costuma ser binário grande. Aqui o
 # checkpoint é minúsculo e é parte do artefato entregue.
@@ -73,9 +72,6 @@ htmlcov/
 .tox/
 .mypy_cache/
 .ruff_cache/
-
-# Notebooks
-.ipynb_checkpoints/
 
 
 # ═══════════════════════════════════════════════════════════════

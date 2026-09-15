@@ -2,10 +2,11 @@
 
 Decisão central deste módulo: em vez de guardar a métrica já calculada,
 guardamos a matriz de confusão. Isso permite reagregar depois por
-qualquer recorte (por ano, por cenário, acumulado) sem recalcular nada
-— e evita o erro de tirar "média de F1s", que não é o F1 do conjunto.
+qualquer recorte (por lote, por versão do modelo, acumulado) sem
+recalcular nada — e evita o erro de tirar "média de F1s", que não é o
+F1 do conjunto.
 
-Por que essa distinção importa: uma janela com 3 chuvas e outra com 90
+Por que essa distinção importa: um lote com 3 chuvas e outro com 90
 pesam igual em uma média simples. Somando os quadrantes e derivando o
 F1 no fim, cada observação pesa o que deve.
 

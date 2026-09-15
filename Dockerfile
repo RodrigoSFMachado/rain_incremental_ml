@@ -40,8 +40,8 @@ ENV PATH="/opt/venv/bin:$PATH" \
     MODEL_PATH=/app/models/model.pt \
     DB_PATH=/app/data/monitoring.db
 
-# Só o que a API usa em runtime. training/, tests/ e notebooks/ ficam
-# de fora: a imagem do serviço não precisa deles.
+# Só o que a API usa em runtime. training/ e tests/ ficam de fora:
+# a imagem do serviço não precisa deles.
 COPY app/ ./app/
 COPY models/ ./models/
 
