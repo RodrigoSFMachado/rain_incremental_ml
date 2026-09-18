@@ -1,19 +1,27 @@
-"""Dashboard de monitoramento (somente leitura).
+"""Dashboard de monitoramento somente leitura.
 
-O que ele lê:
+Fontes de dados:
 
-    data/monitoring.db      tabelas predictions, updates e evaluations
-    models/registry.json    histórico de versões do modelo
+    data/monitoring.db
+        Tabelas `predictions`, `updates` e `evaluations`.
 
-O que ele NÃO faz, de propósito:
+    models/registry.json
+        Histórico de versões do modelo.
 
-    - não carrega models/model.pt nem instancia PyTorch;
-    - não chama a API;
-    - não escreve nada (no Docker, os volumes são montados read-only).
+O dashboard não:
 
-Por isso não há acoplamento entre os dois serviços: o dashboard pode
-subir ou cair sem afetar a API, e vice-versa. O único contrato entre
-eles é o arquivo SQLite.
+    - carrega `models/model.pt` nem instancia o PyTorch;
+    - chama a API;
+    - grava dados.
+
+No Docker, os volumes são montados como somente leitura. Essa separação
+evita o acoplamento entre os serviços: o dashboard pode iniciar ou parar
+sem afetar a API, e a API pode fazer o mesmo sem afetar o dashboard.
+
+O único contrato compartilhado entre os dois serviços é o arquivo
+SQLite.
+
+Para iniciar:
 
     streamlit run dashboard/app.py
 """
@@ -45,11 +53,12 @@ st.set_page_config(page_title="Rain Model — Monitoramento", layout="wide")
 def load(table: str) -> pd.DataFrame:
     """Carrega uma tabela do banco de monitoramento.
 
-    O `ttl=10` é o tempo de vida do cache: depois de 10 segundos, a
-    próxima execução do script vai ao banco de novo. Não é atualização
-    automática — o Streamlit só reexecuta o script quando há interação
-    ou quando a página é recarregada. Deixada a tela parada, os números
-    ficam parados junto.
+    `ttl=10` define o tempo de vida do cache. Após 10 segundos, a próxima
+    execução do script consulta o banco novamente.
+
+    Isso não representa atualização automática: o Streamlit só reexecuta o
+    script quando há interação ou quando a página é recarregada. Portanto,
+    se a tela permanecer parada, os números também permanecerão inalterados.
     """
     if table not in TABELAS:
         raise ValueError(f"Tabela não reconhecida: {table}")
@@ -87,9 +96,10 @@ if predictions.empty:
     st.stop()
 
 # --------------------------------------------------------------- topo
-# Quatro números de volume. "Versão do modelo" é a maior versão que já
-# serviu alguma predição — logo após um /update ela fica uma atrás da
-# versão atual do registry, até chegar a próxima predição.
+# Exibe quatro indicadores de volume.
+# "Versão do modelo" corresponde à maior versão que já serviu alguma
+# predição. Após um `/update`, ela pode permanecer uma versão atrás da
+# versão atual no registry até que uma nova predição seja servida.
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Predições servidas", f"{len(predictions):,}")
@@ -112,8 +122,9 @@ if evaluations.empty:
         "rótulo de uma previsão só existe uma hora depois dela."
     )
 else:
-    # Soma dos quadrantes e derivação do F1 no fim — não média de F1s
-    # por lote, que trataria um lote com 3 chuvas igual a um com 90.
+    # Soma os quadrantes das matrizes de confusão e calcula o F1 apenas ao
+    # final. Não faz média dos F1 por lote, pois isso daria o mesmo peso a um
+    # lote com 3 amostras e a outro com 90.
     total = evaluations[["tp", "tn", "fp", "fn"]].sum()
     tp, tn, fp, fn = (int(total[k]) for k in ("tp", "tn", "fp", "fn"))
     precision = tp / (tp + fp) if (tp + fp) else 0.0
@@ -126,10 +137,11 @@ else:
     c3.metric("Recall", f"{recall:.3f}")
     c4.metric("Rótulos recebidos", f"{int(total.sum()):,}")
 
-    # F1 por lote: mostra se o modelo está degradando com o tempo.
-    # Cada ponto é medido ANTES da atualização daquele lote, então
-    # descreve o desempenho da versão indicada no eixo x sobre dados
-    # que ela ainda não tinha visto.
+    # F1 por lote: mostra se o desempenho do modelo está se degradando ao
+    # longo do tempo.
+    # Cada ponto é calculado antes da atualização correspondente. Assim, ele
+    # representa o desempenho da versão indicada no eixo x em dados que essa
+    # versão ainda não havia utilizado para aprendizado.
     evaluations = evaluations.sort_values("created_at").copy()
 
     for column in ("tp", "tn", "fp", "fn"):
@@ -165,9 +177,10 @@ else:
         f1_denominator.where(f1_denominator.ne(0))
     )
 
-    # F1 só é avaliável se o lote tiver chuva observada ou previsão positiva.
-    # Quando ambos são zero, não houve evento positivo para avaliar:
-    # mantemos NaN para criar uma lacuna no gráfico, em vez de mostrar F1 = 0.
+    # O F1 só é avaliável quando há chuva observada ou uma previsão positiva.
+    # Se ambos forem zero, não houve evento positivo para avaliar. Mantemos
+    # `NaN` para criar uma lacuna no gráfico, em vez de exibir F1 = 0 e
+    # sugerir um desempenho nulo.
     evaluations["f1_evaluable"] = (
         evaluations["actual_positives"].gt(0)
         | evaluations["predicted_positives"].gt(0)

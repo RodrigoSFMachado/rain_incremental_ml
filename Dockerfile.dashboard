@@ -1,17 +1,17 @@
 # Imagem do dashboard de monitoramento.
 #
-# Separada da API de propósito: a API não precisa de Streamlit, e o
-# dashboard não precisa de PyTorch. Separar evita levar o runtime
-# pesado de ML para a imagem de visualização — e é a imagem da API que
-# precisa caber no free tier.
+# Mantida separada da API de propósito: a API não precisa do Streamlit, e
+# o dashboard não precisa do PyTorch. Essa separação evita incluir o
+# runtime pesado de ML na imagem de visualização — especialmente
+# importante porque é a imagem da API que precisa caber no free tier.
 #
-# (Pandas aparece nas duas: a API o usa através de app/features.py, e
-# por isso ele está declarado também no requirements.txt.)
+# O Pandas aparece nas duas imagens: a API o utiliza por meio de
+# `app/features.py`, por isso também está declarado em `requirements.txt`.
 #
-# As versões abaixo são fixadas à mão e repetem as do
-# requirements-train.txt. É duplicação consciente, para manter esta
-# imagem independente do arquivo de treino; se atualizar uma, atualize
-# a outra.
+# As versões abaixo são fixadas manualmente e repetem as versões de
+# `requirements-train.txt`. É uma duplicação consciente para manter esta
+# imagem independente do arquivo de treino. Ao atualizar uma versão,
+# atualize a outra também.
 
 FROM python:3.11-slim
 
@@ -28,8 +28,9 @@ ENV PYTHONUNBUFFERED=1 \
     DB_PATH=/app/data/monitoring.db \
     REGISTRY_PATH=/app/models/registry.json
 
-# Os diretórios existem para servir de ponto de montagem. No Compose
-# eles são sobrescritos pelos bind mounts, em modo somente leitura.
+# Os diretórios existem para servir como pontos de montagem. No Docker
+# Compose, eles são sobrescritos por bind mounts montados em modo somente
+# leitura.
 RUN mkdir -p /app/data /app/models && chown -R appuser:appuser /app
 USER appuser
 

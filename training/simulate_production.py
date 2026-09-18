@@ -1,38 +1,52 @@
-"""Simula o uso do serviço em produção, replayando dados reais.
+"""Simula o cliente em produção.
 
-Percorre um período do dataset hora a hora, chamando `/predict` como um
-cliente faria, e a cada N dias envia o lote rotulado acumulado para
-`/update` — reproduzindo o atraso real com que os rótulos ficam
-disponíveis: só se sabe se choveu depois que a hora passou.
+O cliente gera predições e, a cada N dias, envia o lote acumulado de
+amostras já rotuladas para `/update`. Isso reproduz o atraso real na
+disponibilidade dos rótulos: só é possível saber se choveu depois que a
+hora observada passou.
 
-O intervalo padrão é de 30 dias corridos (`pd.Timedelta(days=30)`), não
-de mês-calendário: o lote fecha 30 dias após o anterior, qualquer que
-seja o dia do mês.
+O intervalo padrão é de 30 dias corridos
+(`pd.Timedelta(days=30)`), e não um mês-calendário. Assim, cada lote é
+fechado 30 dias após o lote anterior, independentemente do dia do mês.
 
-Serve para dois propósitos: popular o banco de monitoramento com dados
-realistas para o dashboard, e demonstrar o ciclo completo do sistema.
+A simulação serve para:
+
+- popular o banco de monitoramento com dados realistas para o dashboard;
+- demonstrar o ciclo completo do sistema.
 
 ATENÇÃO — este script MODIFICA artefatos do projeto:
 
-    models/model.pt        sobrescrito a cada /update (versão avança)
-    models/registry.json   ganha uma entrada por atualização
-    data/monitoring.db     ganha predições, updates e avaliações
+    models/model.pt
+        É sobrescrito a cada `/update`, com avanço da versão.
 
-Se você pretende commitar o modelo do treino inicial, rode
-`python -m training.train_initial` depois da simulação para restaurar o
-checkpoint v1, ou use `--no-update` para apenas gerar predições.
+    models/registry.json
+        Recebe uma entrada por atualização.
+
+    data/monitoring.db
+        Recebe predições, atualizações e avaliações.
+
+Se quiser preservar o modelo do treinamento inicial, execute:
+
+    python -m training.train_initial
+
+após a simulação para restaurar o checkpoint v1. Como alternativa, use
+`--no-update` para gerar apenas predições.
 
 Uso:
-    # contra uma API já rodando:
+
+    # Contra uma API já em execução:
     uvicorn app.main:app &
     python -m training.simulate_production --days 120
 
-    # ou sem subir servidor nenhum:
+    # Sem iniciar um servidor:
     python -m training.simulate_production --days 730 --in-process
 
-    # intervalo de atualização diferente do padrão:
+    # Com intervalo de atualização personalizado:
     python -m training.simulate_production \
-        --start 2024-01-01 --days 730 --update-every-days 30 --in-process
+        --start 2024-01-01 \
+        --days 730 \
+        --update-every-days 30 \
+        --in-process
 """
 
 from __future__ import annotations
@@ -57,8 +71,11 @@ DEFAULT_UPDATE_EVERY_DAYS = 30
 def to_payload(row: pd.Series) -> dict:
     """Converte uma linha do dataset no corpo esperado por `/predict`.
 
-    Usa `FEATURE_NAMES` de `app/constants.py`, a mesma lista que o
-    schema da API usa para montar o vetor. Uma lista só, um contrato só.
+    Usa `FEATURE_NAMES`, definido em `app/constants.py`, que é a mesma lista
+    utilizada pelo schema da API para montar o vetor de entrada.
+
+    Assim, há uma única lista de features e um único contrato entre o dataset
+    e a API.
     """
     return {name: float(row[name]) for name in FEATURE_NAMES}
 

@@ -1,21 +1,27 @@
 """Testes da API.
 
+Execute com:
+
     pytest tests/test_api.py -v
 
-Cada teste roda contra um modelo, um banco e um registro de versões
-temporários, para não tocar nos artefatos do projeto. Os três
-isolamentos são necessários e cada um funciona de um jeito diferente:
+Cada teste usa um modelo, um banco de dados e um registro de versões
+temporários, evitando alterações nos artefatos reais do projeto.
 
-    MODEL_PATH e DB_PATH   variáveis de ambiente lidas por app/main.py
-                           no momento do import, por isso o reload.
-    REGISTRY_PATH          atributo de módulo em app/registry.py,
-                           resolvido a cada chamada.
+Os três isolamentos são necessários e funcionam de maneiras diferentes:
 
-O terceiro só funciona porque `registry.register` resolve o caminho
-dentro da função. Se ele usasse `registry_path=REGISTRY_PATH` como
-default na assinatura, o valor ficaria preso no momento da definição e
-os testes gravariam no models/registry.json real do repositório — que
-é versionado e faz parte do artefato entregue.
+    MODEL_PATH e DB_PATH
+        Variáveis de ambiente lidas por `app/main.py` no momento do
+        import. Por isso, é necessário recarregar o módulo.
+
+    REGISTRY_PATH
+        Atributo de módulo em `app/registry.py`, resolvido a cada chamada.
+
+O terceiro isolamento só funciona porque `registry.register` resolve o
+caminho dentro da função. Se a assinatura usasse
+`registry_path=REGISTRY_PATH` como valor padrão, o caminho seria capturado
+no momento da definição da função. Nesse caso, os testes gravariam no
+`models/registry.json` real do repositório, que é versionado e faz parte
+do artefato entregue.
 """
 
 import sys
@@ -40,13 +46,15 @@ SAMPLE = {
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    """Sobe a API com modelo, banco e registro isolados.
+    """Inicia a API com modelo, banco de dados e registro de versões isolados.
 
-    Os dados sintéticos são gerados na escala real de cada feature. Se
-    fossem N(0,1), o scaler ficaria calibrado numa escala em que
-    `mslp=1012.5` estaria a centenas de desvios da média, o sigmoid
-    saturaria em 1.0 e os testes não conseguiriam observar mudança
-    alguma na predição.
+    Os dados sintéticos são gerados na escala real de cada feature. Se fossem
+    gerados a partir de `N(0, 1)`, o scaler seria calibrado em uma escala
+    incompatível: um valor como `mslp=1012.5` ficaria a centenas de desvios
+    padrão da média.
+
+    Nesse cenário, o sigmoid saturaria em `1.0`, impedindo os testes de
+    observar mudanças nas predições.
     """
     rng = np.random.default_rng(0)
     n = 500
@@ -99,11 +107,11 @@ def test_predict_retorna_probabilidade_valida(client):
 
 
 def test_predict_aplica_o_limiar_do_modelo(client):
-    """`prediction` precisa ser coerente com `probability` e `threshold`.
+    """Verifica se `prediction` é coerente com `probability` e `threshold`.
 
-    Protege contra a confusão mais comum entre probabilidade e decisão
-    binária: se algum dia o limiar deixasse de ser aplicado, este teste
-    quebraria antes de o erro chegar a um cliente.
+    O teste protege contra a confusão comum entre probabilidade e decisão
+    binária. Se o limiar deixasse de ser aplicado em algum momento, o teste
+    falharia antes que o erro chegasse a um cliente.
     """
     body = client.post("/predict", json=SAMPLE).json()
     esperado = int(body["probability"] >= body["threshold"])
@@ -137,11 +145,13 @@ def test_update_incrementa_versao_e_avalia_antes(client):
 
 
 def test_update_muda_a_predicao(client):
-    """Aprender com um lote precisa ter efeito observável na saída.
+    """Verifica se aprender com um lote produz efeito observável na saída.
 
-    O lote usa rótulo negativo: a probabilidade inicial para esta
-    observação é alta, então há espaço para cair. Testar na direção
-    oposta falharia por saturação em 1.0, não por falta de aprendizado.
+    O lote usa um rótulo negativo. Como a probabilidade inicial dessa
+    observação é alta, há espaço para que ela diminua após o aprendizado.
+
+    Testar na direção oposta poderia falhar por saturação em `1.0`, e não
+    por ausência de aprendizado.
     """
     antes = client.post("/predict", json=SAMPLE).json()["probability"]
 
@@ -158,10 +168,10 @@ def test_update_muda_a_predicao(client):
 
 
 def test_update_rejeita_learning_rate_fora_da_faixa(client):
-    """`learning_rate` acima de 1e-2 é barrado pelo schema.
+    """Verifica que `learning_rate` acima de `1e-2` é rejeitado pelo schema.
 
-    Cobre o valor que o Swagger sugeria por padrão antes de o campo
-    ganhar um `examples` explícito.
+    O teste cobre o valor que o Swagger sugeria como padrão antes de o campo
+    receber um exemplo explícito (`examples`).
     """
     payload = {
         "observations": [{"features": SAMPLE, "target": 0}],
@@ -175,11 +185,11 @@ def test_update_exige_ao_menos_uma_observacao(client):
 
 
 def test_metrics_sem_rotulos_nao_tem_performance(client):
-    """Antes de qualquer /update, `performance` é None — não zero.
+    """Verifica que `performance` é `None` antes de qualquer `/update`, e não zero.
 
-    Sem rótulo verdadeiro não existe acerto a medir. Devolver zeros
-    pareceria um modelo ruim; None deixa claro que a medição não
-    aconteceu.
+    Sem rótulo verdadeiro, não há como medir o desempenho. Retornar zeros
+    daria a impressão de que o modelo teve desempenho ruim; retornar `None`
+    deixa explícito que ainda não houve medição.
     """
     client.post("/predict", json=SAMPLE)
     m = client.get("/metrics").json()
@@ -214,12 +224,12 @@ def test_versions_registra_historico(client):
 
 
 def test_registry_de_teste_fica_isolado(tmp_path, client):
-    """O registro escrito pelos testes não pode ser o do repositório.
+    """Verifica que os testes não escrevem no registro do repositório.
 
-    Este é o teste que protege contra a regressão do argumento default
-    avaliado uma única vez. Se `registry.register` voltar a capturar o
-    caminho na assinatura, o arquivo temporário nunca é criado e este
-    teste falha — em vez de o repositório ser silenciosamente sujo.
+    Este teste protege contra a regressão causada por um argumento padrão
+    avaliado apenas uma vez. Se `registry.register` voltar a capturar o
+    caminho na assinatura, o arquivo temporário não será criado e o teste
+    falhará, evitando que o repositório seja alterado silenciosamente.
     """
     import app.registry as registry
 

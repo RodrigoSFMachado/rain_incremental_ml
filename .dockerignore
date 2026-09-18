@@ -14,19 +14,21 @@ __pycache__/
 
 # Código que não entra em nenhuma das duas imagens.
 # O Dockerfile da API copia apenas app/ e models/; o do dashboard,
-# apenas dashboard/. Excluir o resto reduz o contexto enviado ao
+# apenas dashboard/. Excluir o restante reduz o contexto enviado ao
 # daemon do Docker.
 training/
 tests/
 docs/
 
 # Dados brutos e intermediários de treino
-# O container da API recebe o checkpoint em models/, não precisa do dataset.
+# O container da API recebe o checkpoint em models/ e não precisa do
+# dataset.
 data/*.csv
 data/*.parquet
 
 # Estado operacional e backups locais
-# Em Docker Compose, data/ e models/ são montados como volumes em runtime.
+# No Docker Compose, data/ e models/ são montados como volumes durante
+# a execução.
 data/*.db
 data/*_before_simulation.db
 models/*_before_simulation.pt

@@ -1,11 +1,17 @@
-"""Transforma o CSV bruto do ASOS no dataset pronto para modelagem.
+"""Transforma o CSV bruto do ASOS em um dataset pronto para modelagem.
 
-O CSV é baixado manualmente da interface do Iowa Environmental Mesonet
-(ASOS/AWOS/METAR). Os parâmetros exatos do download estão no README, na
-seção "Dados". O pipeline espera o arquivo em `data/MIA_2012_2025.csv`;
-outro nome exige passar `--input`.
+O CSV é baixado manualmente pela interface do Iowa Environmental Mesonet
+(ASOS/AWOS/METAR). Os parâmetros exatos do download estão documentados
+no README, na seção "Dados".
 
-Uso:
+Por padrão, o pipeline espera encontrar o arquivo em:
+
+    data/MIA_2012_2025.csv
+
+Para usar outro nome ou caminho, informe `--input`.
+
+Exemplo:
+
     python -m training.prepare_data \
         --input data/MIA_2012_2025.csv \
         --output data/dataset.parquet \

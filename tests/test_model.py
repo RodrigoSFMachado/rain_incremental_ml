@@ -1,8 +1,10 @@
 """Testes do modelo.
 
-O teste mais importante aqui é `test_incremental_continues_from_saved_weights`:
-ele prova, de forma verificável, que a atualização incremental continua
-do estado salvo em vez de recomeçar do zero.
+O teste mais importante é `test_incremental_continues_from_saved_weights`.
+Ele verifica que a atualização incremental continua a partir do estado
+salvo, em vez de reiniciar o treinamento do zero.
+
+Execute com:
 
     pytest tests/test_model.py -v
 """
@@ -23,7 +25,9 @@ from app.model import RainModel
 
 @pytest.fixture
 def data():
-    """Dados sintéticos pequenos, só para exercitar a mecânica."""
+    """Gera um conjunto pequeno de dados sintéticos, suficiente apenas para
+    exercitar a mecânica.
+    """
     rng = np.random.default_rng(0)
     X = rng.normal(size=(400, len(FEATURE_NAMES)))
     y = (X[:, 0] + X[:, 3] + rng.normal(scale=0.5, size=400) > 0.8).astype(float)
@@ -56,7 +60,9 @@ def test_incremental_fit_exige_fit_antes(data):
 
 
 def test_scaler_nao_muda_no_update(trained, data):
-    """O scaler é congelado: atualizar o modelo não pode alterá-lo."""
+    """Verifica que o scaler permanece congelado e não é alterado durante a
+    atualização do modelo.
+    """
     X, y = data
     mean_antes = trained.scaler.mean.copy()
     std_antes = trained.scaler.std.copy()
@@ -80,7 +86,7 @@ def test_versao_incrementa_a_cada_update(trained, data):
 # --------------------------------------------------------------------------
 
 def test_save_load_preserva_predicoes(trained, data, tmp_path):
-    """Salvar e recarregar não pode mudar nenhuma previsão."""
+    """Verifica que salvar e recarregar o modelo preserva exatamente todas as previsões."""
     X, _ = data
     antes = trained.predict_proba(X)
 
@@ -91,7 +97,9 @@ def test_save_load_preserva_predicoes(trained, data, tmp_path):
 
 
 def test_save_load_preserva_estado_do_otimizador(trained, tmp_path):
-    """O estado do Adam precisa sobreviver ao round-trip."""
+    """Verifica que o estado do otimizador Adam é preservado no ciclo de salvar e
+    recarregar o modelo.
+    """
     trained.save(tmp_path / "m.pt")
     carregado = RainModel.load(tmp_path / "m.pt")
 
@@ -110,14 +118,16 @@ def test_save_load_preserva_estado_do_otimizador(trained, tmp_path):
 # --------------------------------------------------------------------------
 
 def test_incremental_continues_from_saved_weights(trained, data, tmp_path):
-    """Prova que `incremental_fit` continua o treino em vez de recomeçar.
+    """Verifica que `incremental_fit` continua o treinamento em vez de reiniciá-lo.
 
-    A verificação tem duas partes:
+    A validação tem duas partes:
 
-    1. Ao recarregar o checkpoint, os pesos são idênticos aos salvos.
-    2. Após uma atualização com taxa de aprendizado baixa, os pesos
-       mudam pouco — porque partiram do estado anterior. Um modelo
-       recriado do zero teria pesos completamente diferentes.
+    1. Depois de recarregar o checkpoint, os pesos permanecem idênticos aos
+    valores salvos.
+
+    2. Após uma atualização com baixa taxa de aprendizado, os pesos sofrem
+    apenas pequenas alterações, pois o treinamento parte do estado anterior.
+    Um modelo recriado do zero teria pesos completamente diferentes.
     """
     X, y = data
     trained.save(tmp_path / "v1.pt")
