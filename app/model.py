@@ -1,27 +1,26 @@
 """Modelo MLP em PyTorch com suporte a aprendizado incremental.
 
-A classe `RainModel` encapsula tudo que precisa ser preservado entre
-uma sessão e a próxima:
+`RainModel` reúne os componentes necessários para prever e continuar
+treinando o modelo entre diferentes sessões:
 
-    - os pesos da rede;
-    - o estado do otimizador (o Adam guarda médias móveis dos gradientes);
-    - o scaler, congelado no treino inicial;
-    - o limiar de decisão calibrado;
-    - metadados de versão.
+- pesos da rede;
+- estado do otimizador Adam;
+- scaler usado no treinamento inicial;
+- limiar de decisão;
+- metadados da versão.
 
-Tudo isso vai para um único arquivo `.pt`, o que torna o checkpoint
-autocontido: quem carrega o arquivo não precisa de mais nada para
-prever ou continuar treinando.
+Esses dados são salvos em um único arquivo `.pt`, tornando o checkpoint
+autocontido para predição e treinamento incremental.
 
-Vocabulário, porque os três termos são fáceis de confundir:
+Termos usados no módulo:
 
-    logit        saída crua da rede, em (-inf, +inf)
-    probability  sigmoid(logit), em [0, 1]
-    prediction   probability >= threshold, em {0, 1}
+- `logit`: saída bruta da rede, no intervalo `(-inf, +inf)`;
+- `probability`: resultado de `sigmoid(logit)`, entre `0` e `1`;
+- `prediction`: decisão binária baseada em `probability >= threshold`.
 
-`predict_proba` devolve a segunda; `predict` devolve a terceira. A API
-devolve as duas, mais o limiar usado, para que o cliente possa aplicar
-o próprio corte.
+`predict_proba` retorna a probabilidade. `predict` retorna a decisão
+binária. A API expõe ambas, junto com o limiar utilizado, permitindo
+que o cliente aplique outro corte se necessário.
 """
 
 from __future__ import annotations
@@ -53,14 +52,18 @@ SEED: int = 42
 
 
 def set_seed(seed: int = SEED) -> None:
-    """Fixa as sementes para tornar o treino reprodutível.
+    """Fixa as sementes para tornar os experimentos reproduzíveis.
 
-    Atenção ao escopo: `np.random.seed` e `torch.manual_seed` são
-    globais do processo, não do objeto. Como `RainModel.__init__`
-    chama esta função, instanciar ou carregar um modelo reinicia a
-    sequência aleatória de todo o programa — inclusive a ordem de
-    embaralhamento dos lotes em treinos posteriores. O efeito é
-    determinístico e reprodutível, mas não é local ao objeto.
+    `np.random.seed` e `torch.manual_seed` alteram o estado aleatório
+    global do processo, não apenas o estado deste objeto.
+
+    Como `RainModel.__init__` chama esta função, criar ou carregar um
+    modelo reinicia a sequência aleatória usada pelo programa. Isso
+    também pode afetar o embaralhamento dos lotes em treinamentos
+    posteriores.
+
+    O comportamento é determinístico, mas a semente não é isolada por
+    instância.
     """
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -71,12 +74,15 @@ def set_seed(seed: int = SEED) -> None:
 # --------------------------------------------------------------------------
 
 class MLP(nn.Module):
-    """Rede densa mínima: entrada -> 16 -> ReLU -> 1.
+    """Rede neural densa mínima: entrada -> 16 -> ReLU -> 1.
 
-    A saída é o *logit*, não a probabilidade. O sigmoid é aplicado
-    apenas na inferência. Isso permite usar `BCEWithLogitsLoss`, que
-    combina sigmoid e log de forma numericamente estável — aplicar os
-    dois separadamente perde precisão quando o logit é grande.
+    A camada final retorna o logit, não uma probabilidade. O sigmoid é
+    aplicado somente durante a inferência.
+
+    No treinamento, a saída é usada diretamente com `BCEWithLogitsLoss`,
+    que combina sigmoid e cálculo do log de forma numericamente estável.
+    Aplicar sigmoid separadamente antes da loss pode causar perda de
+    precisão quando os logits têm valores muito altos ou muito baixos.
     """
 
     def __init__(self, n_features: int, hidden: int = HIDDEN_SIZE) -> None:
@@ -97,17 +103,18 @@ class MLP(nn.Module):
 
 @dataclass
 class FrozenScaler:
-    """Padronização com estatísticas fixas.
+    """Padroniza as features usando estatísticas fixas.
 
-    Diferente de um scaler adaptativo, este é calculado uma única vez
-    no treino inicial e nunca mais muda.
+    O scaler é ajustado uma única vez no treinamento inicial e permanece
+    inalterado durante as atualizações incrementais.
 
-    O motivo é direto: os pesos da rede foram aprendidos em um espaço
-    de features com determinada média e escala. Se as estatísticas de
-    normalização mudarem, esse espaço muda junto e os pesos existentes
-    deixam de ser válidos. Congelar o scaler é o que permite continuar
-    o treinamento em vez de recomeçar — é a armadilha número um do
-    aprendizado incremental com rede neural.
+    A rede aprendeu pesos em um espaço definido pela média e pelo desvio
+    padrão originais. Se essas estatísticas mudarem, a escala das entradas
+    também muda e os pesos deixam de representar o mesmo problema.
+
+    Manter o scaler congelado preserva a compatibilidade entre o treinamento
+    inicial, as predições e o aprendizado incremental, evitando a necessidade
+    de recriar o modelo.
     """
 
     mean: np.ndarray = field(default_factory=lambda: np.zeros(1))
@@ -131,16 +138,19 @@ class FrozenScaler:
 class RainModel:
     """Modelo de previsão de chuva com treino inicial e atualização incremental.
 
+    A classe reúne a rede, o estado do treinamento e os metadados necessários
+    para realizar predições, salvar checkpoints e continuar aprendendo.
+
     Attributes:
-        net: A rede MLP.
-        optimizer: Adam. Seu estado é salvo e restaurado junto com os pesos.
-        scaler: Padronização congelada.
-        threshold: Limiar de decisão calibrado em validação.
-        version: Incrementa a cada atualização incremental.
-        n_updates: Quantidade de chamadas a `incremental_fit`.
-        n_samples_seen: Amostras usadas em TREINO ao longo da vida do
-            modelo (fit + todos os incremental_fit). Não conta predições
-            servidas — esse número vive no SQLite, em `predictions`.
+        net: Rede neural MLP.
+        optimizer: Otimizador Adam, com estado salvo e restaurado junto aos pesos.
+        scaler: Scaler ajustado no treino inicial e mantido fixo.
+        threshold: Limiar de decisão calibrado no conjunto de validação.
+        version: Versão atual do modelo, incrementada a cada atualização incremental.
+        n_updates: Número de chamadas a `incremental_fit`.
+        n_samples_seen: Número de amostras usadas no treinamento ao longo da vida do modelo,
+            incluindo `fit` e todas as chamadas a `incremental_fit`. Não inclui predições
+            servidas; esse histórico é mantido no SQLite, na tabela `predictions`.
     """
 
     def __init__(
@@ -172,15 +182,15 @@ class RainModel:
         return torch.tensor(self.scaler.transform(X), dtype=torch.float32)
 
     def _loss_fn(self) -> nn.Module:
-        """Loss com peso na classe positiva, para lidar com o desbalanceamento.
+        """Define a função de perda com peso para a classe positiva.
 
-        Com cerca de 5% de positivos, sem `pos_weight` o gradiente é
-        dominado pelos negativos e a rede converge para "nunca chove".
+        Como os casos de chuva representam cerca de 5% dos dados, os exemplos
+        negativos podem dominar o gradiente. Sem `pos_weight`, a rede poderia
+        aprender a prever sempre "não vai chover".
 
-        `pos_weight` é calculado no treino inicial e reutilizado nas
-        atualizações. Recalculá-lo a partir de um lote pequeno seria
-        instável: um lote sem nenhum positivo produziria um peso
-        infinito.
+        O `pos_weight` é calculado no treinamento inicial e reutilizado nas
+        atualizações incrementais. Recalculá-lo em cada lote seria instável:
+        um lote sem exemplos positivos produziria um peso indefinido ou infinito.
         """
         return nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor(self.pos_weight, dtype=torch.float32)
@@ -195,11 +205,14 @@ class RainModel:
         lr: float,
         shuffle: bool = True,
     ) -> float:
-        """Laço de treino compartilhado por `fit` e `incremental_fit`.
+        """Executa o laço de treinamento usado por `fit` e `incremental_fit`.
 
-        Ser o mesmo laço nos dois casos é o ponto: aprendizado
-        incremental não é um algoritmo diferente, é o mesmo passo de
-        gradiente aplicado sobre um estado preservado.
+        O mesmo procedimento é utilizado no treino inicial e nas atualizações
+        incrementais. A diferença é que o treino incremental começa com os
+        pesos, o estado do otimizador e o scaler já preservados.
+
+        Assim, aprendizado incremental não é um algoritmo separado: é a aplicação
+        de novos passos de gradiente sobre o estado existente do modelo.
         """
         for group in self.optimizer.param_groups:
             group["lr"] = lr
@@ -236,21 +249,24 @@ class RainModel:
         batch_size: int = BATCH_SIZE,
         lr: float = LR_INITIAL,
     ) -> float:
-        """Treino inicial, do zero.
+        """Executa o treinamento inicial do modelo.
 
-        Faz três coisas que o `incremental_fit` nunca faz: ajusta o
-        scaler, calcula o peso da classe positiva e treina por muitas
-        épocas. Só deve ser chamado uma vez, na criação do modelo.
+        O método deve ser chamado uma única vez, quando o modelo é criado.
+        Ele ajusta o scaler, calcula o peso da classe positiva e treina a rede
+        por várias épocas.
+
+        Diferentemente de `incremental_fit`, começa com o modelo sem estado
+        treinado e define os componentes usados pelas atualizações futuras.
 
         Args:
-            X: Matriz de features, na ordem de `self.feature_names`.
+            X: Matriz de features na ordem de `self.feature_names`.
             y: Vetor binário do alvo.
-            epochs: Épocas de treino.
-            batch_size: Tamanho do lote.
+            epochs: Número de épocas de treinamento.
+            batch_size: Tamanho dos lotes.
             lr: Taxa de aprendizado.
 
         Returns:
-            A loss média da última época.
+            Loss média da última época.
         """
         self.scaler.fit(X)
 
@@ -278,33 +294,32 @@ class RainModel:
         batch_size: int = BATCH_SIZE,
         lr: float = LR_UPDATE,
     ) -> float:
-        """Continua o treinamento a partir dos pesos atuais.
+        """Continua o treinamento a partir do estado atual do modelo.
 
-        O que este método NÃO faz, e é justamente o ponto:
+        O método aplica novos passos de gradiente sem recriar ou reinicializar
+        os componentes aprendidos:
 
-            - não recria a rede;
-            - não reinicializa os pesos;
-            - não recria o otimizador (o estado do Adam é preservado);
-            - não recalcula o scaler;
-            - não recalibra o limiar.
+        - não recria a rede nem reinicializa seus pesos;
+        - preserva o estado do otimizador Adam;
+        - não recalcula o scaler;
+        - não recalibra o limiar de decisão.
 
-        A rede segue exatamente de onde parou. As únicas diferenças em
-        relação ao `fit` são a taxa de aprendizado, dez vezes menor
-        (1e-4 contra 1e-3), e o número reduzido de épocas — ambas para
-        evitar que o lote novo sobrescreva o que o modelo já sabia.
+        O modelo continua exatamente de onde parou. Em relação ao `fit`, usa
+        uma taxa de aprendizado menor e menos épocas para reduzir o risco de o
+        novo lote sobrescrever o conhecimento anterior.
 
         Args:
             X: Features das novas observações rotuladas.
             y: Rótulos correspondentes.
-            epochs: Épocas sobre o lote novo. Manter baixo.
-            batch_size: Tamanho do lote.
+            epochs: Número de épocas sobre o novo lote.
+            batch_size: Tamanho dos lotes.
             lr: Taxa de aprendizado da atualização.
 
         Returns:
-            A loss média da última época.
+            Loss média da última época.
 
         Raises:
-            RuntimeError: Se o modelo ainda não passou por `fit`.
+            RuntimeError: Se o treinamento inicial ainda não foi executado.
         """
         # O scaler nunca ajustado ainda tem shape (1,), o default do
         # dataclass. É o sinal de que `fit` não rodou — e treinar sem
@@ -334,12 +349,15 @@ class RainModel:
 
     @torch.no_grad()
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Devolve a probabilidade da classe positiva, em [0, 1].
+        """Retorna a probabilidade estimada da classe positiva, entre 0 e 1.
 
-        Atenção: com `pos_weight` alto, essas probabilidades não são
-        calibradas em sentido absoluto. 0,84 não significa 84% de chance
-        de chover. Elas ordenam bem o risco (é o que a ROC-AUC mede),
-        mas para leitura direta seria preciso uma calibração posterior.
+        Como a função de perda usa um `pos_weight` elevado, a saída não deve ser
+        interpretada como uma probabilidade calibrada. Por exemplo, `0.84` não
+        significa necessariamente 84% de chance de chuva.
+
+        A saída é mais adequada para ordenar os casos por nível de risco, como
+        na avaliação por ROC-AUC. Para interpretar os valores como probabilidades
+        reais, seria necessária uma etapa adicional de calibração.
         """
         self.net.eval()
         logits = self.net(self._to_tensor(X))
@@ -356,26 +374,25 @@ class RainModel:
         y: np.ndarray,
         grid: Optional[np.ndarray] = None,
     ) -> float:
-        """Escolhe o limiar que maximiza o F1 em um conjunto de validação.
+        """Escolhe o limiar que maximiza o F1 no conjunto de validação.
 
-        Importante: deve ser chamado com dados de VALIDAÇÃO, nunca com
-        os dados de teste. O limiar é um parâmetro ajustado; escolhê-lo
-        olhando o teste transforma o teste em treino e infla o
-        resultado final, que deixa de estimar desempenho em dados
-        nunca vistos.
+        O método deve ser executado apenas com dados de validação. O conjunto de
+        teste não pode ser usado para escolher o limiar, pois isso transforma o
+        teste em parte do treinamento e produz uma estimativa otimista.
 
-        Por que 0,5 não serve como limiar fixo aqui: com 5% de
-        positivos e `pos_weight` alto, a distribuição de probabilidades
-        não é centrada, e 0,5 não é um corte natural. O valor calibrado
-        neste projeto ficou em torno de 0,84.
+        O valor `0.5` não é necessariamente adequado neste projeto. A classe
+        positiva representa cerca de 5% dos dados e a loss usa `pos_weight`, o
+        que altera a distribuição das saídas. Por isso, o limiar é ajustado
+        explicitamente; neste projeto, ficou próximo de `0.84`.
 
         Args:
-            X: Features de validação.
-            y: Rótulos de validação.
-            grid: Limiares a testar. Padrão: 0.05 a 0.94, passo 0.01.
+            X: Features do conjunto de validação.
+            y: Rótulos do conjunto de validação.
+            grid: Limiar a testar. O padrão cobre `0.05` a `0.94`,
+                com passo de `0.01`.
 
         Returns:
-            O limiar escolhido, já gravado em `self.threshold`.
+            O limiar escolhido e armazenado em `self.threshold`.
         """
         grid = np.arange(0.05, 0.95, 0.01) if grid is None else grid
         probs = self.predict_proba(X)
@@ -396,14 +413,21 @@ class RainModel:
     # ------------------------------------------------------- persistência
 
     def save(self, path: str | Path) -> Path:
-        """Salva o checkpoint completo em um único arquivo `.pt`.
+        """Salva o estado completo do modelo em um único arquivo `.pt`.
 
-        "Checkpoint" aqui é mais do que os pesos: é todo o estado
-        necessário para reconstruir o modelo e continuar treinando.
-        Salvar apenas `state_dict()` da rede, como muitos tutoriais
-        fazem, bastaria para prever, mas perderia o otimizador, o
-        scaler e o limiar — e o aprendizado incremental deixaria de
-        funcionar corretamente.
+        O checkpoint inclui mais do que os pesos da rede. Ele armazena tudo o
+        que é necessário para restaurar o modelo e continuar o treinamento:
+
+        - pesos da rede;
+        - estado do otimizador;
+        - scaler;
+        - limiar de decisão;
+        - versão e demais metadados.
+
+        Salvar apenas o `state_dict()` permitiria fazer predições, mas perderia
+        o estado do otimizador e os parâmetros usados no pré-processamento e na
+        decisão. Nesse caso, o aprendizado incremental deixaria de continuar
+        corretamente.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -429,19 +453,15 @@ class RainModel:
 
     @classmethod
     def load(cls, path: str | Path) -> "RainModel":
-        """Recarrega um modelo salvo, pronto para prever ou continuar treinando.
+        """"Carrega um checkpoint confiável para predição ou treino incremental.
 
-        Restaura também o estado do otimizador. Sem isso, o Adam
-        recomeçaria com as médias móveis zeradas e os primeiros passos
-        após o reload seriam erráticos — o modelo pioraria logo depois
-        de ser carregado, sem motivo aparente. É um bug silencioso, e é
-        a razão de o checkpoint guardar `optimizer_state_dict`.
+        Restaura os pesos da rede, o estado do otimizador e os metadados
+        necessários para continuar o treinamento.
 
-        Segurança: `weights_only=False` é necessário porque o
-        checkpoint contém arrays numpy e listas Python além dos
-        tensores. Isso significa que o arquivo é desserializado com
-        pickle, então só carregue `.pt` que você mesmo produziu. Nunca
-        aponte este método para um checkpoint recebido de terceiros.
+        `weights_only=False` é usado porque o checkpoint contém arrays NumPy e
+        outros objetos além de tensores. Como essa opção usa desserialização
+        completa via pickle, carregue apenas checkpoints produzidos e controlados
+        pelo próprio projeto.
         """
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
 
@@ -466,7 +486,12 @@ class RainModel:
     # -------------------------------------------------------- metadados
 
     def info(self) -> Dict:
-        """Resumo do estado do modelo, usado pelos endpoints da API."""
+        """Retorna um resumo do estado atual do modelo.
+
+        Usado pela API para expor a versão, o histórico de atualizações,
+        a quantidade de amostras usadas no treinamento e a configuração
+        básica da rede.
+        """
         return {
             "version": self.version,
             "n_updates": self.n_updates,

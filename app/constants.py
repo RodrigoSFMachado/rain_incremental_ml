@@ -1,27 +1,7 @@
-"""Constantes de domínio compartilhadas por treino, API e simulação.
+"""Constantes de domínio compartilhadas pelo treino, pela API e pela simulação.
 
-Este módulo é a **fonte única** dos nomes e da ordem das 16 features.
-`app/features.py`, `app/model.py`, `app/schemas.py` e os scripts de
-`training/` derivam tudo daqui — nenhum deles redeclara a lista.
-
-Por que uma fonte única importa aqui mais do que de costume:
-
-A ordem das features é um contrato implícito entre três lugares — o
-scaler congelado, a primeira camada da rede e o corpo JSON do
-`/predict`. Se duas cópias da lista divergirem, a API continua
-aceitando a requisição (os campos são nomeados e todos existem),
-monta o vetor na ordem errada, normaliza cada valor pela média e pelo
-desvio de outra coluna e devolve uma probabilidade plausível.
-
-Não há exceção, não há log, o teste continua verde. Manter uma lista
-só elimina a classe inteira de bug.
-
-Nota sobre dependências: este módulo não importa pandas, então quem
-precisa apenas do contrato das features paga menos por isso aqui. Mas
-isso não torna a API livre de pandas — `app/features.py` o importa e é
-carregado em runtime através do `app/schemas.py`. Por esse motivo
-pandas está declarado em `requirements.txt`, e não apenas no
-`requirements-train.txt`.
+Define a fonte única para os nomes e a ordem das 16 features do modelo,
+garantindo que scaler, rede neural, API e scripts de treino usem o mesmo contrato.
 """
 
 from __future__ import annotations
@@ -33,7 +13,7 @@ STATION: str = "MIA"
 # Coluna bruta do CSV ASOS com a precipitação acumulada na hora, em polegadas.
 TARGET_RAW: str = "p01i"
 
-# Coluna derivada pelo pipeline: choveu na hora SEGUINTE (0/1).
+# Variável-alvo: indica se choveu na hora seguinte (0/1).
 TARGET: str = "rain_next_hour"
 
 # Limiar em polegadas para considerar que houve chuva na hora.
@@ -41,7 +21,7 @@ TARGET: str = "rain_next_hour"
 # traz "T" (trace), tratado como 0.00 na limpeza.
 RAIN_THRESHOLD_INCHES: float = 0.01
 
-# Ordem canônica das features do modelo. NÃO reordene nem insira no
+# Ordem das features do modelo. NÃO reordene nem insira no
 # meio: um checkpoint já treinado deixaria de ser compatível, porque o
 # scaler e os pesos da primeira camada foram aprendidos nesta ordem.
 FEATURE_NAMES: List[str] = [

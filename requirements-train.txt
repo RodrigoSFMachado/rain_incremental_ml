@@ -1,8 +1,8 @@
-# Dependências de treino, testes e dashboard local.
-# Não entram na imagem da API.
+# Dependências de treino, testes e do dashboard local.
+# Não são incluídas na imagem da API.
 #
-# pandas e numpy já vêm de requirements.txt via -r, por isso não são
-# repetidos aqui.
+# `pandas` e `numpy` já são instalados por `requirements.txt`, incluído
+# via `-r`; por isso, não são repetidos aqui.
 
 -r requirements.txt
 

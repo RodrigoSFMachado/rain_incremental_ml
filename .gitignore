@@ -1,27 +1,29 @@
 # ═══════════════════════════════════════════════════════════════
 # Dados
 # ═══════════════════════════════════════════════════════════════
-# O CSV bruto tem 31 MB e é dado público: quem clona baixa da fonte
-# (Iowa Environmental Mesonet). O parquet é derivado dele.
+
+# O CSV bruto tem 31 MB e é público: quem clonar baixa-o da fonte
+# (Iowa Environmental Mesonet). O Parquet é derivado dele.
 data/*.csv
 data/*.parquet
 
-# Banco de monitoramento: criado em runtime pela API, cresce com o
-# uso e é específico da execução de cada pessoa.
+# Banco de monitoramento: criado em runtime pela API, cresce com o uso
+# e é específico da execução de cada pessoa.
 data/*.db
 data/*.sqlite
 data/*.sqlite3
 
-# Mantém a pasta data/ no repositório mesmo estando vazia, para que
-# quem clonar não precise criá-la à mão.
+# Mantém a pasta `data/` no repositório mesmo estando vazia, para que
+# quem clonar não precise criá-la manualmente.
 !data/.gitkeep
 
 
 # ═══════════════════════════════════════════════════════════════
 # MLflow
 # ═══════════════════════════════════════════════════════════════
-# Histórico de runs é local e pessoal. As métricas que importam já
-# estão no README.
+
+# O histórico de runs é local e pessoal. As métricas relevantes já estão
+# documentadas no README.
 mlflow.db
 mlruns/
 mlartifacts/
@@ -30,26 +32,32 @@ mlartifacts/
 # ═══════════════════════════════════════════════════════════════
 # ATENÇÃO: o que NÃO deve ser ignorado
 # ═══════════════════════════════════════════════════════════════
-# models/model.pt  -> 9,6 KB, e o Dockerfile faz COPY models/.
-#                     Se for ignorado, o build da imagem quebra.
-# models/registry.json
+
+# `models/model.pt` tem 9,6 KB, e o Dockerfile executa `COPY models/`.
+# Se o arquivo for ignorado, o build da imagem falhará.
+models/model.pt
+models/registry.json
+
+# Isso pode parecer contraintuitivo, porque arquivos `.pt` costumam ser
+# binários grandes. Neste projeto, o checkpoint é pequeno e faz parte
+# do artefato entregue.
+
+# Antes de commitar, confirme que o modelo é o do treinamento inicial:
+# python -m training.train_initial --no-mlflow
 #
-# Contraintuitivo, porque .pt costuma ser binário grande. Aqui o
-# checkpoint é minúsculo e é parte do artefato entregue.
-#
-# Antes de commitar, confira que o modelo é o do treino inicial:
-#   python -m training.train_initial --no-mlflow
-# Rodar simulate_production.py sobrescreve o model.pt.
+# Executar `simulate_production.py` sobrescreve `model.pt`.
 
 
 # ═══════════════════════════════════════════════════════════════
 # Python
 # ═══════════════════════════════════════════════════════════════
+
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
 
 # Ambientes virtuais
 .venv/
@@ -58,11 +66,13 @@ env/
 ENV/
 .conda/
 
+
 # Empacotamento
 build/
 dist/
 *.egg-info/
 .eggs/
+
 
 # Testes e cobertura
 .pytest_cache/
@@ -77,9 +87,10 @@ htmlcov/
 # ═══════════════════════════════════════════════════════════════
 # Configuração e segredos
 # ═══════════════════════════════════════════════════════════════
-# Este projeto não usa .env hoje, mas a regra fica: nenhum arquivo
-# com credencial entra no histórico do git. Uma vez commitado, um
-# segredo continua no histórico mesmo depois de removido.
+
+# O projeto não usa `.env` atualmente, mas esta regra impede que
+# credenciais sejam adicionadas ao histórico do Git. Depois de
+# commitado, um segredo continua no histórico mesmo se for removido.
 .env
 .env.*
 !.env.example
@@ -91,6 +102,7 @@ secrets.json
 # ═══════════════════════════════════════════════════════════════
 # Editores
 # ═══════════════════════════════════════════════════════════════
+
 .vscode/
 .idea/
 *.swp
@@ -101,15 +113,18 @@ secrets.json
 # ═══════════════════════════════════════════════════════════════
 # Sistema operacional
 # ═══════════════════════════════════════════════════════════════
+
 # Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+
 # macOS
 .DS_Store
 .AppleDouble
+
 
 # Linux
 .fuse_hidden*

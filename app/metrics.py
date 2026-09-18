@@ -1,23 +1,28 @@
-"""Cálculo de métricas de classificação binária.
+"""Calcula métricas de classificação binária.
 
-Decisão central deste módulo: em vez de guardar a métrica já calculada,
-guardamos a matriz de confusão. Isso permite reagregar depois por
-qualquer recorte (por lote, por versão do modelo, acumulado) sem
-recalcular nada — e evita o erro de tirar "média de F1s", que não é o
-F1 do conjunto.
+O módulo armazena a matriz de confusão, em vez de salvar apenas métricas
+já calculadas. Com os valores de TP, TN, FP e FN, é possível recalcular
+as métricas por lote, por versão do modelo ou no acumulado, sem manter
+um valor separado para cada recorte.
 
-Por que essa distinção importa: um lote com 3 chuvas e outro com 90
-pesam igual em uma média simples. Somando os quadrantes e derivando o
-F1 no fim, cada observação pesa o que deve.
+Essa abordagem também evita calcular uma média simples de F1. Lotes com
+tamanhos diferentes não devem ter o mesmo peso; agregando a matriz de
+confusão, cada observação contribui proporcionalmente para o resultado
+final.
 
-Sobre a escolha da métrica principal: com ~5% de positivos, a acurácia
-sozinha não diz nada. Um modelo que responde "não vai chover" sempre
-acerta 95% das horas e tem recall zero — é inútil e parece ótimo. O F1
-combina precisão (dos alertas emitidos, quantos se confirmaram) e
-recall (das chuvas ocorridas, quantas foram previstas), e só é alto
-quando as duas são. A ROC-AUC mede coisa diferente: a capacidade de
-ordenar o risco, independente de qualquer limiar. Um modelo pode ter
-AUC alta e F1 baixo se o limiar estiver mal escolhido.
+O F1 é a métrica principal porque a classe positiva representa cerca de
+5% das observações. Acurácia isolada seria enganosa: um modelo que sempre
+prevê "não vai chover" poderia acertar aproximadamente 95% dos casos,
+mas teria recall zero.
+
+O F1 combina:
+
+- precisão: quantos alertas emitidos estavam corretos;
+- recall: quantas chuvas ocorridas foram identificadas.
+
+A ROC-AUC mede outra propriedade: a capacidade de ordenar os casos por
+risco, independentemente do limiar. Por isso, um modelo pode ter AUC
+alta e F1 baixo quando o limiar de decisão não está adequado.
 """
 
 from __future__ import annotations
@@ -57,10 +62,12 @@ def compute_metrics(cm: Dict[str, int]) -> Dict[str, float]:
         Dicionário com "accuracy", "precision", "recall" e "f1".
 
     Notes:
-        Os denominadores são checados um a um. Um lote de duas semanas
-        sem nenhuma chuva produz tp = fn = 0 e recall indefinido; aqui
-        vira 0.0 em vez de exceção, porque a agregação precisa
-        continuar rodando.
+        Cada denominador é verificado antes do cálculo da métrica.
+
+        Se um lote de duas semanas não tiver nenhum caso positivo,
+        `tp = fn = 0`, tornando o recall indefinido. Nesse caso, o módulo
+        retorna `0.0` em vez de lançar uma exceção, permitindo que as métricas
+        continuem sendo agregadas normalmente.
     """
     tp, tn, fp, fn = cm["tp"], cm["tn"], cm["fp"], cm["fn"]
     total = tp + tn + fp + fn
@@ -82,12 +89,14 @@ def compute_metrics(cm: Dict[str, int]) -> Dict[str, float]:
 
 
 def roc_auc(y_true: Sequence[float], y_score: Sequence[float]) -> float:
-    """Calcula a AUC-ROC pelo método dos postos (estatística de Mann-Whitney).
+    """Calcula a ROC-AUC usando a estatística de Mann-Whitney.
 
-    Implementado à mão para não adicionar scikit-learn às dependências
-    da API, que precisa ser leve. A equivalência é conhecida: a AUC é a
-    probabilidade de um positivo sorteado ao acaso receber score maior
-    que um negativo sorteado ao acaso.
+        A implementação é feita sem scikit-learn para manter a API leve
+        e evitar uma dependência adicional em produção.
+
+        A ROC-AUC pode ser interpretada como a probabilidade de um exemplo
+        positivo escolhido aleatoriamente receber uma pontuação maior que um
+        exemplo negativo escolhido aleatoriamente.
 
     Args:
         y_true: Rótulos verdadeiros (0/1).

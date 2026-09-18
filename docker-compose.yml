@@ -1,17 +1,19 @@
 # Sobe a API e o dashboard.
 #
-#   docker compose up --build
-#   API .......... http://localhost:8000/docs
-#   Dashboard .... http://localhost:8501
+#     docker compose up --build
 #
-# Os volumes são o ponto importante: sem eles, o modelo atualizado via
-# /update e o histórico de predições desapareceriam a cada restart.
-# São também o que liga os dois serviços — o dashboard lê o mesmo
-# arquivo SQLite que a API escreve, sem acoplamento entre os processos.
+# API:       http://localhost:8000/docs
+# Dashboard: http://localhost:8501
 #
-# Os health checks vêm das imagens (instrução HEALTHCHECK nos
-# Dockerfiles), e é o que faz `docker compose up --wait` esperar de
-# verdade os dois serviços.
+# Os volumes são essenciais: sem eles, o modelo atualizado por `/update`
+# e o histórico de predições desapareceriam a cada reinicialização.
+#
+# Eles também conectam os dois serviços: o dashboard lê o mesmo arquivo
+# SQLite que a API grava, sem acoplamento entre os processos.
+#
+# Os health checks são definidos nas imagens, por meio da instrução
+# `HEALTHCHECK` nos Dockerfiles. Por isso, `docker compose up --wait`
+# aguarda efetivamente até que os dois serviços estejam saudáveis.
 
 services:
   api:
@@ -42,10 +44,10 @@ services:
     environment:
       DB_PATH: /app/data/monitoring.db
       REGISTRY_PATH: /app/models/registry.json
-    # Só define a ORDEM de inicialização. O dashboard não chama a API:
-    # ele lê o SQLite direto, então não depende dela para funcionar.
-    # Sem `condition: service_healthy` de propósito — seria uma espera
-    # sem motivo.
+    # Define apenas a ordem de inicialização. O dashboard não chama a API:
+    # ele lê o SQLite diretamente e, portanto, não depende dela para funcionar.
+    # `condition: service_healthy` não é usado de propósito, pois introduziria
+    # uma espera sem necessidade.
     depends_on:
       - api
     restart: unless-stopped

@@ -1,22 +1,33 @@
-"""Treino inicial do modelo, com tracking no MLflow.
+"""Treinamento inicial do modelo com acompanhamento no MLflow.
 
-Este é o único ponto do projeto onde o modelo é criado do zero. Todas
-as atualizações posteriores partem do checkpoint gerado aqui.
+Este é o único ponto do projeto em que o modelo é criado do zero. Todas
+as atualizações posteriores partem do checkpoint gerado por este
+treinamento.
 
-Divisão temporal (sem embaralhar — os dados são uma série no tempo):
+A divisão é temporal, sem embaralhamento, porque os dados formam uma
+série cronológica:
 
-    treino     : 2021 - 2022   -> aprende os pesos
-    validação  : 2023          -> calibra o limiar de decisão
-    teste      : 2024 - 2025   -> avaliação final, usada uma única vez
+    treino
+        2021 - 2022 — aprende os pesos.
 
-Por que não um split aleatório: embaralhar colocaria observações de
-julho de 2025 no treino e de junho de 2025 no teste. Como horas
-vizinhas são altamente correlacionadas, o modelo estaria praticamente
-consultando a resposta, e a métrica de teste seria otimista demais.
+    validação
+        2023 — calibra o limiar de decisão.
+
+    teste
+        2024 - 2025 — avaliação final, utilizada uma única vez.
+
+Um split aleatório não seria adequado. Ele poderia colocar observações
+de julho de 2025 no treino e de junho de 2025 no teste. Como horas
+vizinhas são altamente correlacionadas, o modelo teria acesso indireto à
+resposta, produzindo uma métrica de teste otimista demais.
 
 Uso:
+
     python -m training.train_initial
-    mlflow ui --backend-store-uri sqlite:///mlflow.db   # para ver os resultados
+
+Para visualizar os resultados no MLflow:
+
+    mlflow ui --backend-store-uri sqlite:///mlflow.db
 """
 
 from __future__ import annotations
@@ -54,10 +65,11 @@ def split(df: pd.DataFrame):
 
 
 def as_arrays(df: pd.DataFrame):
-    """Extrai X e y no formato esperado pelo modelo.
+    """Extrai `X` e `y` no formato esperado pelo modelo.
 
-    A seleção por `FEATURE_NAMES` garante a ordem canônica, mesmo que o
-    parquet tenha as colunas em outra sequência.
+    A seleção por `FEATURE_NAMES` garante a ordem canônica das features,
+    mesmo que as colunas do arquivo Parquet estejam organizadas em outra
+    sequência.
     """
     X = df[FEATURE_NAMES].to_numpy(dtype=np.float32)
     y = df[TARGET].to_numpy(dtype=np.float32)
@@ -65,11 +77,14 @@ def as_arrays(df: pd.DataFrame):
 
 
 def persistence_baseline(df: pd.DataFrame) -> dict:
-    """Baseline trivial: se está chovendo agora, vai chover na próxima hora.
+    """Baseline trivial: se está chovendo agora, prevê chuva na próxima hora.
 
-    Serve para responder à pergunta que todo entrevistador faz: o modelo
-    é melhor do que o palpite óbvio? Sem baseline, um F1 de 0,53 não
-    significa nada — pode ser excelente ou pior que adivinhar.
+    Serve para responder à pergunta comum em entrevistas: o modelo é melhor
+    do que o palpite óbvio?
+
+    Sem um baseline, um F1 de `0,53` não é interpretável: pode representar
+    um resultado excelente ou ser pior do que simplesmente repetir o estado
+    atual.
     """
     _, y = as_arrays(df)
     return evaluate(y, df["rain_now"].to_numpy(dtype=float), threshold=0.5)

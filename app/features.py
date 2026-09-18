@@ -1,16 +1,12 @@
-"""Limpeza dos dados brutos e engenharia de features.
+"""Limpa os dados brutos e cria as features do modelo.
 
-Este módulo é compartilhado entre o treino (offline) e a API (online).
-Isso garante que a mesma transformação aplicada no treino seja aplicada
-na predição, evitando training/serving skew.
+O módulo é usado tanto pelo treinamento offline quanto pela API online,
+garantindo que os dados sejam transformados da mesma forma nos dois
+ambientes.
 
 Fluxo:
-    CSV bruto ASOS -> clean_asos() -> build_features() -> DataFrame pronto
 
-As constantes do domínio (nomes e ordem das features, alvo, limiar de
-chuva) vivem em `app/constants.py` e são apenas reexportadas aqui, para
-que `from app.features import FEATURE_NAMES` continue funcionando nos
-arquivos que já usavam esse caminho. A lista existe em um lugar só.
+    CSV bruto ASOS -> clean_asos() -> build_features() -> DataFrame pronto
 """
 
 from __future__ import annotations
@@ -40,36 +36,33 @@ __all__ = [
 # --------------------------------------------------------------------------
 
 def clean_asos(raw: pd.DataFrame, station: str = STATION) -> pd.DataFrame:
-    """Limpa o CSV bruto do ASOS e devolve as observações horárias de rotina.
+    """Limpa o CSV bruto do ASOS e retorna as observações horárias de rotina.
 
     Args:
         raw: DataFrame lido diretamente do CSV do IEM/ASOS.
-        station: Código da estação de interesse.
+        station: Código da estação a ser filtrada.
 
     Returns:
-        DataFrame ordenado no tempo, com as colunas de `RAW_COLUMNS` já
-        convertidas para numérico.
+        DataFrame ordenado por tempo, com as colunas de `RAW_COLUMNS`
+        convertidas para os tipos numéricos apropriados.
 
     Raises:
-        ValueError: Se nada sobrar após a limpeza.
+        ValueError: Se nenhum registro permanecer após a limpeza.
 
     Notes:
-        Mantém apenas os METAR de rotina (minuto 53). Os relatórios
-        especiais (SPECI) são emitidos justamente quando o tempo muda,
-        o que tornaria a *frequência* das observações correlacionada com
-        o alvo. Eles também não trazem a pressão ao nível do mar.
+        Mantém apenas os METAR de rotina publicados no minuto 53.
+        Relatórios SPECI são ignorados porque sua ocorrência depende de
+        mudanças no tempo e poderia tornar a frequência das observações
+        relacionada ao alvo.
 
-        O filtro `minute == 53` é específico da estação MIA. Outras
-        estações publicam o relatório de rotina em outro minuto; trocar
-        de estação exige conferir esse valor, ou o resultado será um
-        DataFrame vazio.
+        O filtro `minute == 53` é específico da estação MIA. Ao trocar de
+        estação, confirme o minuto do relatório de rotina; caso contrário,
+        nenhum registro poderá ser encontrado.
 
-        Atenção ao que esta função NÃO faz: ela não reindexa a série
-        nem preenche horas ausentes. Se a estação não reportou às
-        14:53, aquela linha simplesmente não existe. Depois do filtro,
-        cerca de 99,9% dos intervalos consecutivos são de exatamente 1
-        hora — o restante é tratado explicitamente no alvo (ver
-        `build_features`), mas não nos lags.
+        A função não preenche horários ausentes nem reindexa a série. Quando
+        uma observação não existe, o intervalo permanece ausente. O alvo
+        verifica se a próxima observação ocorre exatamente uma hora depois,
+        mas os lags continuam sendo calculados por número de linhas.
     """
     df = raw.copy()
     df = df[df["station"] == station].copy()
@@ -113,29 +106,26 @@ def clean_asos(raw: pd.DataFrame, station: str = STATION) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 def build_features(df: pd.DataFrame, with_target: bool = True) -> pd.DataFrame:
-    """Constrói as features do modelo a partir dos dados limpos.
+    """Cria as features do modelo a partir dos dados limpos.
 
     Args:
-        df: Saída de `clean_asos`, ordenada no tempo.
-        with_target: Se True, cria a coluna alvo `rain_next_hour`.
+        df: DataFrame retornado por `clean_asos`, ordenado por tempo.
+        with_target: Se `True`, cria a coluna `rain_next_hour`.
 
     Returns:
-        DataFrame com "valid", as colunas de FEATURE_NAMES e (opcionalmente)
-        o alvo, sem valores ausentes.
+        DataFrame contendo `valid`, as colunas de `FEATURE_NAMES` e,
+        opcionalmente, o alvo, sem valores ausentes.
 
     Notes:
-        O alvo é deslocado em uma hora: as features do instante t são
-        usadas para prever a chuva no intervalo t -> t+1. Isso torna o
-        problema uma previsão de fato, e não um diagnóstico da hora
-        corrente.
+        O alvo usa a observação seguinte: as features no instante `t`
+        são usadas para prever a chuva no intervalo `t -> t+1`.
 
-        Limitação conhecida: os lags (`mslp_delta_3h`, `relh_delta_1h`)
-        usam `shift`, que conta *linhas*, não horas. Nos poucos pontos
-        em que há buraco na série, "3 linhas atrás" não é "3 horas
-        atrás". O alvo é protegido contra isso pela checagem de gap
-        abaixo; os lags não são. Como os buracos são cerca de 0,1% das
-        observações, o efeito foi considerado desprezível e o
-        comportamento mantido — mas ele existe.
+        Os lags `mslp_delta_3h` e `relh_delta_1h` são calculados com
+        `shift`, que conta linhas e não horas. Assim, em intervalos com
+        dados ausentes, três linhas atrás podem não representar três horas.
+
+        O alvo só é mantido quando a próxima observação ocorre exatamente
+        uma hora depois. Essa verificação não é aplicada aos lags.
     """
     out = df.copy().sort_values("valid").reset_index(drop=True)
 
@@ -192,5 +182,5 @@ def build_features(df: pd.DataFrame, with_target: bool = True) -> pd.DataFrame:
 
 
 def prepare(raw: pd.DataFrame, station: str = STATION) -> pd.DataFrame:
-    """Atalho: limpeza + features em uma chamada."""
+    """Executa a limpeza dos dados e a criação das features em uma chamada."""
     return build_features(clean_asos(raw, station=station))

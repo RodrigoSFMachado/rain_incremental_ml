@@ -1,18 +1,19 @@
-"""Contratos de entrada e saída da API.
+"""Define os contratos de entrada e saída da API.
 
-Os schemas fazem a validação na borda: se um campo estiver faltando ou
-fora de faixa, a requisição é rejeitada com 422 antes de chegar ao
-modelo. Isso evita a classe de bug mais chata em serviço de ML — o
-modelo receber lixo silenciosamente e devolver uma probabilidade
-plausível.
+Os schemas validam os dados na borda. Campos ausentes ou fora dos limites
+são rejeitados com `422` antes de chegarem ao modelo, evitando que entradas
+inválidas sejam processadas e produzam uma probabilidade aparentemente
+válida.
 
-Decisão de contrato: o cliente envia o vetor de features já pronto,
-incluindo as derivadas (`dew_spread`, `hour_sin`, `month_cos`, ...).
-A alternativa seria aceitar um timestamp e as leituras cruas e derivar
-tudo no servidor. Foi mantido o formato atual porque ele é o mesmo
-vetor que o modelo consome no treino, o que torna a simulação de
-produção um replay direto do dataset. O custo é que o cliente precisa
-saber calcular sin/cos — algo listado em "próximos passos" no README.
+O cliente envia o vetor de features já preparado, incluindo variáveis
+derivadas como `dew_spread`, `hour_sin` e `month_cos`. Esse vetor é igual
+ao consumido pelo modelo durante o treino, permitindo reproduzir na API
+as mesmas entradas usadas no dataset.
+
+A alternativa seria receber o horário e as leituras brutas para executar
+as transformações no servidor. O formato atual foi mantido por ser mais
+simples para a simulação de produção. Como contrapartida, o cliente precisa
+calcular as variáveis derivadas, incluindo as codificações seno e cosseno.
 """
 
 from __future__ import annotations
@@ -25,11 +26,12 @@ from app.features import FEATURE_NAMES
 
 
 class WeatherFeatures(BaseModel):
-    """Observação meteorológica no instante t.
+    """Representa uma observação meteorológica no instante `t`.
 
-    Os campos de variação (`mslp_delta_3h`, `relh_delta_1h`) têm valor
-    padrão zero para permitir chamadas sem histórico, mas o ideal é
-    enviá-los: são o que informa ao modelo se a pressão está caindo.
+    Os campos de variação `mslp_delta_3h` e `relh_delta_1h` usam zero como
+    valor padrão, permitindo predições sem histórico. Quando disponíveis,
+    esses valores devem ser enviados, pois informam tendências recentes da
+    pressão e da umidade.
     """
 
     tmpf: float = Field(..., description="Temperatura (°F)", examples=[82.0])
@@ -50,29 +52,30 @@ class WeatherFeatures(BaseModel):
     month_cos: float = Field(..., ge=-1, le=1, examples=[-0.866])
 
     def to_list(self) -> List[float]:
-        """Converte para lista na ordem canônica de `FEATURE_NAMES`.
+        """Converte a observação em uma lista na ordem canônica de `FEATURE_NAMES`.
 
-        A ordem importa: o scaler e a primeira camada da rede dependem
-        dela. Derivar a lista de `FEATURE_NAMES` (definida em
-        `app/constants.py`) em vez de escrever à mão garante que treino
-        e serving nunca divirjam.
+        A ordem é necessária porque o scaler e a primeira camada da rede foram
+        treinados nessa sequência. Usar `FEATURE_NAMES`, definido em
+        `app/constants.py`, evita duplicar a lista e mantém o treino e a API
+        consistentes.
         """
         return [getattr(self, name) for name in FEATURE_NAMES]
 
 
 class PredictResponse(BaseModel):
-    """Resposta do `/predict`.
+    """Representa a resposta do endpoint `/predict`.
 
-    Devolve os dois níveis de informação de propósito:
+    Retorna duas informações diferentes:
 
-        probability  a saída contínua do modelo, entre 0 e 1;
-        prediction   a decisão binária, já com o limiar aplicado.
+    - `probability`: saída contínua do modelo, entre `0` e `1`;
+    - `prediction`: decisão binária após aplicar o limiar configurado.
 
-    Não são a mesma coisa. Com limiar calibrado em 0,84, uma
-    probabilidade de 0,79 resulta em `prediction = 0`. Devolver os dois
-    permite ao cliente aplicar o próprio corte se quiser ser mais ou
-    menos conservador, e é por isso que `threshold` também vai na
-    resposta.
+    Por exemplo, com limiar de `0.84`, uma probabilidade de `0.79` resulta
+    em `prediction = 0`.
+
+    O campo `threshold` também é retornado para que o cliente conheça o
+    limiar usado. Assim, pode aplicar uma regra mais ou menos conservadora
+    à probabilidade recebida, se necessário.
     """
 
     prediction: int = Field(..., description="1 = vai chover na próxima hora")
@@ -83,24 +86,29 @@ class PredictResponse(BaseModel):
 
 
 class LabeledObservation(BaseModel):
-    """Uma observação com o rótulo verdadeiro já conhecido."""
+    """Representa uma observação cujo rótulo verdadeiro já está disponível."""
 
     features: WeatherFeatures
     target: int = Field(..., ge=0, le=1, description="1 se choveu na hora seguinte")
 
 
 class UpdateRequest(BaseModel):
-    """Lote de observações rotuladas para atualizar o modelo.
+    """Representa um lote de observações rotuladas para atualização incremental.
 
-    Aceita de 1 a 5.000 observações. O lote é preferível a uma
-    observação por vez: com apenas 5% de positivos, um lote de tamanho
-    1 quase nunca contém chuva, e o gradiente resultante é ruído.
+    Aceita entre 1 e 5.000 observações. O uso de lotes é preferível ao envio
+    de uma observação por vez porque, com apenas 5% de casos positivos, um
+    lote unitário quase sempre contém somente exemplos negativos, produzindo
+    um gradiente pouco informativo.
 
-    `epochs` e `learning_rate` são opcionais. Omitidos, a API usa os
-    defaults de `app/model.py` (EPOCHS_UPDATE = 2, LR_UPDATE = 1e-4).
-    O learning rate de update é dez vezes menor que o do treino inicial
-    justamente para que um lote recente não sobrescreva o que o modelo
-    aprendeu antes.
+    `epochs` e `learning_rate` são opcionais. Quando omitidos, a API utiliza
+    os valores padrão definidos em `app/model.py`:
+
+    - `EPOCHS_UPDATE = 2`;
+    - `LR_UPDATE = 1e-4`.
+
+    A taxa de aprendizado da atualização é dez vezes menor que a usada no
+    treinamento inicial, reduzindo o risco de o lote recente sobrescrever o
+    conhecimento já aprendido.
     """
 
     observations: List[LabeledObservation] = Field(..., min_length=1, max_length=5000)
@@ -109,9 +117,9 @@ class UpdateRequest(BaseModel):
         description="Épocas sobre o lote. Padrão: EPOCHS_UPDATE (2).",
         examples=[2],
     )
-    # O `examples` aqui não é decorativo: sem ele, o Swagger UI sugere
-    # 1 como valor de exemplo, que viola o próprio `le=1e-2` e resulta
-    # em 422 para quem apenas clica em "Try it out".
+    # O exemplo explícito evita que o Swagger UI sugira um valor inválido.
+    # Sem ele, a interface poderia usar 1 como exemplo para `learning_rate`,
+    # mas esse valor ultrapassa o limite `le=1e-2` e causaria erro 422.
     learning_rate: Optional[float] = Field(
         None, gt=0, le=1e-2,
         description="Taxa de aprendizado do update. Padrão: LR_UPDATE (1e-4).",
@@ -141,13 +149,15 @@ class ModelInfo(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Resposta do `/health`.
+    """Representa a resposta do endpoint `/health`.
 
-    `status` é "ok" apenas quando o modelo está carregado. Quando o
-    checkpoint não é encontrado, o serviço sobe assim mesmo e responde
-    "degraded" com HTTP 200 — o processo está vivo, mas os endpoints
-    que dependem do modelo devolvem 503. Ver a nota sobre liveness e
-    readiness no README.
+    `status` assume o valor `"ok"` somente quando o modelo está carregado.
+    Se o checkpoint não for encontrado, o serviço continua respondendo com
+    HTTP 200 e `status="degraded"`.
+
+    Nesse caso, o processo está vivo, mas os endpoints que dependem do modelo
+    retornam `503 Service Unavailable`. A distinção entre liveness e readiness
+    é detalhada no README.
     """
 
     status: str

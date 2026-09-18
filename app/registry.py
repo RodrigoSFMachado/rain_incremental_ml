@@ -1,38 +1,36 @@
-"""Registro operacional de versões do modelo.
+"""Registra operacionalmente as versões do modelo.
 
-Substitui o MLflow Model Registry por um arquivo JSON.
+Este módulo usa `models/registry.json` como um registro local de versões,
+em vez de depender do MLflow Model Registry.
 
-A justificativa é de escopo: o Model Registry do MLflow exige um
-backend store, um servidor rodando e a API passando a depender dele em
-tempo de execução — se o MLflow cai, a API cai junto. Neste projeto o
-"modelo em produção" é um arquivo `.pt` no disco, e o que realmente
-precisamos saber é: qual é a versão atual, quando foi criada, com
-quantas amostras e com que desempenho.
+A escolha é de escopo: o Model Registry exigiria um backend, um servidor
+em execução e uma dependência adicional da API. Se esse serviço falhasse,
+a API também poderia ser afetada. Como o modelo em produção é um arquivo
+`.pt` local, o JSON já é suficiente para registrar a versão atual, a data,
+a quantidade de amostras e as métricas.
 
-Um JSON responde a isso em poucas linhas e continua legível por
-humanos. O MLflow segue sendo usado para *tracking* do treinamento
-inicial (offline), que é onde ele agrega de verdade.
+O MLflow continua sendo usado para acompanhar o treinamento inicial offline,
+onde registra parâmetros, métricas e artefatos.
 
-Divisão de responsabilidades no projeto:
+Divisão de responsabilidades:
 
-    models/registry.json   histórico operacional local (este módulo)
-    data/monitoring.db     eventos de runtime: predições e avaliações
-    mlflow.db              runs do treino inicial (params, métricas, artefatos)
+    models/registry.json  Histórico operacional local de versões.
+    data/monitoring.db    Predições e avaliações geradas em runtime.
+    mlflow.db             Runs do treinamento inicial.
 
-Semântica do campo `metrics` (importante ao ler o JSON direto):
+Semântica de `metrics`:
 
     stage="initial_training"
-        métricas do conjunto de teste, medidas por
-        training/train_initial.py.
+        Métricas do conjunto de teste calculadas por
+        `training/train_initial.py`.
 
     stage="incremental_update"
-        métricas do lote rotulado recebido, medidas ANTES da
-        atualização. Descrevem o desempenho dos pesos ANTERIORES sobre
-        aqueles dados, não o desempenho do modelo depois de treinar.
-        O campo `notes` repete isso em texto.
+        Métricas do lote rotulado calculadas antes da atualização.
+        Elas descrevem o desempenho dos pesos anteriores sobre o lote,
+        não o desempenho do modelo após o treinamento incremental.
 
-O campo `is_current` marca a versão operacional ativa, isto é, a que
-corresponde ao arquivo em models/model.pt.
+O campo `notes` registra essa distinção, e `is_current` identifica a
+versão operacional ativa correspondente a `models/model.pt`.
 """
 
 from __future__ import annotations
@@ -51,16 +49,17 @@ REGISTRY_PATH = Path(os.getenv("REGISTRY_PATH", "models/registry.json"))
 def _resolve(registry_path: Optional[Path]) -> Path:
     """Resolve o caminho do registro no momento da chamada.
 
-    Por que não usar `registry_path: Path = REGISTRY_PATH` na
-    assinatura: em Python, o valor default de um parâmetro é avaliado
-    uma única vez, quando a função é definida. O default ficaria preso
-    ao objeto Path original, e substituir `registry.REGISTRY_PATH`
-    depois — o que os testes fazem via monkeypatch — não teria efeito
-    nenhum. Na prática, os testes gravariam no models/registry.json
-    real do repositório, que é um arquivo versionado e faz parte do
-    artefato entregue.
+    O caminho não é definido como valor padrão na assinatura porque
+    valores padrão são avaliados quando a função é criada.
 
-    Lendo a variável de módulo aqui dentro, a substituição funciona.
+    Se fosse usado `registry_path: Path = REGISTRY_PATH`, o parâmetro
+    continuaria apontando para o `Path` original mesmo depois de
+    `registry.REGISTRY_PATH` ser substituído pelos testes via
+    `monkeypatch`.
+
+    Consultar `REGISTRY_PATH` dentro da função permite que os testes
+    redirecionem o registro para um diretório temporário, evitando
+    alterações no arquivo versionado do repositório.
     """
     if registry_path is not None:
         return Path(registry_path)
@@ -82,22 +81,21 @@ def register(
     notes: str = "",
     registry_path: Optional[Path] = None,
 ) -> Dict:
-    """Adiciona uma entrada ao registro e marca a versão como atual.
+    """Adiciona uma versão ao registro e marca-a como atual.
 
     Args:
         version: Número da versão do modelo.
-        model_path: Caminho do arquivo `.pt`.
-        stage: "initial_training" ou "incremental_update".
-        n_samples: Amostras usadas nesta etapa.
-        metrics: Objeto plano de métricas (f1, precision, recall, ...).
-            Ver a nota sobre semântica no topo do módulo: em
-            atualizações incrementais são as métricas do lote ANTES do
-            treino.
-        notes: Observação livre, em texto.
-        registry_path: Onde gravar. Se None, usa `REGISTRY_PATH`.
+        model_path: Caminho do checkpoint `.pt`.
+        stage: Etapa que criou a versão. Pode ser `"initial_training"` ou `"incremental_update"`.
+        n_samples: Número de amostras usadas nessa etapa.
+        metrics: Dicionário simples com as métricas calculadas, como
+            `f1`, `precision` e `recall`. Em atualizações incrementais,
+            representa o desempenho do lote antes do treinamento.
+        notes: Observação adicional sobre a versão.
+        registry_path: Caminho do arquivo de registro. Se `None`, usa `REGISTRY_PATH`.
 
     Returns:
-        A entrada recém-criada.
+        A entrada criada no registro.
     """
     path = _resolve(registry_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,10 +125,14 @@ def register(
 
 
 def current(registry_path: Optional[Path] = None) -> Optional[Dict]:
-    """Devolve a entrada marcada como atual, ou None se o registro estiver vazio.
+    """Retorna a versão operacional atual do registro.
 
-    Se nenhuma entrada tiver `is_current` — um registro editado à mão,
-    por exemplo — cai para a última entrada, que é a mais recente.
+    Devolve a entrada com `is_current=True` ou `None` se o registro estiver
+    vazio.
+
+    Se nenhuma entrada estiver marcada como atual, por exemplo, após uma
+    edição manual do arquivo, usa a última entrada registrada, assumindo
+    que ela representa a versão mais recente.
     """
     entries = _load(_resolve(registry_path))
     for entry in entries:
@@ -140,5 +142,5 @@ def current(registry_path: Optional[Path] = None) -> Optional[Dict]:
 
 
 def history(registry_path: Optional[Path] = None) -> List[Dict]:
-    """Devolve todas as versões registradas, em ordem cronológica."""
+    """Retorna todas as versões registradas em ordem cronológica."""
     return _load(_resolve(registry_path))

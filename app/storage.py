@@ -1,20 +1,21 @@
-"""Persistência em SQLite: log de predições, atualizações e avaliações.
+"""Persistência em SQLite para predições, atualizações e avaliações.
 
-SQLite foi escolhido em vez de Prometheus por proporção entre valor e
-custo. Ele é um arquivo, já vem com o Python, aceita SQL para as
-agregações do endpoint `/metrics` e é lido diretamente pelo dashboard.
-Prometheus + Grafana resolveriam o mesmo problema com dois containers
-a mais e uma linguagem de consulta nova.
+SQLite foi escolhido por oferecer o necessário com pouca complexidade:
+é um arquivo, já está disponível no Python, permite agregações SQL para
+o endpoint `/metrics` e pode ser lido diretamente pelo dashboard.
 
-Limite conhecido: SQLite serializa escritas e é adequado para
-demonstração local e baixa concorrência. Com várias instâncias
-escrevendo ao mesmo tempo, a escolha seria outra.
+Prometheus e Grafana resolveriam um problema semelhante, mas exigiriam
+dois serviços adicionais e uma nova linguagem de consulta.
 
-Três tabelas:
+A limitação é que o SQLite serializa as escritas. Ele atende à
+demonstração local e a cenários de baixa concorrência, mas não é a melhor
+opção para várias instâncias escrevendo simultaneamente.
 
-    predictions   toda predição servida (para volume e distribuição)
-    updates       toda atualização incremental (para rastrear versões)
-    evaluations   desempenho medido quando os rótulos chegam
+Tabelas:
+
+    predictions   Predições servidas, usadas para volume e distribuição.
+    updates       Atualizações incrementais, usadas para rastrear versões.
+    evaluations   Desempenho medido após a chegada dos rótulos.
 """
 
 from __future__ import annotations
@@ -69,12 +70,14 @@ def _now() -> str:
 
 @contextmanager
 def connect(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
-    """Abre a conexão, garante o schema e faz commit ao sair.
+    """Abre uma conexão, garante a existência do schema e confirma a transação.
 
-    O `executescript(SCHEMA)` roda em toda conexão. Todos os comandos
-    são `IF NOT EXISTS`, então é idempotente e barato. A vantagem é que
-    qualquer ponto de entrada — a API, um teste, um script — encontra o
-    banco pronto sem precisar lembrar de inicializar antes.
+    `executescript(SCHEMA)` é executado em cada nova conexão. Como os comandos
+    usam `IF NOT EXISTS`, a operação é idempotente e tem baixo custo.
+
+    Assim, qualquer ponto de entrada, como a API, um teste ou um script,
+    encontra o banco pronto sem precisar executar uma etapa de inicialização
+    separada.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,11 +109,12 @@ def log_prediction(
     features: List[float],
     db_path: Path = DB_PATH,
 ) -> int:
-    """Registra uma predição servida e devolve o id gerado.
+    """Registra uma predição servida e retorna o identificador gerado.
 
-    As features vão como JSON em uma coluna de texto. Não é normalizado
-    de propósito: elas nunca são consultadas por campo, apenas lidas
-    inteiras quando se quer reconstituir uma predição específica.
+    As features são armazenadas como JSON em uma coluna de texto. Essa
+    estrutura não é normalizada porque os campos não são consultados
+    individualmente; o JSON só é recuperado completo quando é necessário
+    reconstituir uma predição específica.
     """
     with connect(db_path) as conn:
         cur = conn.execute(
@@ -127,7 +131,7 @@ def log_update(
     from_version: int, to_version: int, n_samples: int, loss: float,
     db_path: Path = DB_PATH,
 ) -> None:
-    """Registra uma atualização incremental: de qual versão para qual."""
+    """Registra uma atualização incremental, indicando a versão de origem e a versão resultante."""
     with connect(db_path) as conn:
         conn.execute(
             "INSERT INTO updates (created_at, from_version, to_version, n_samples, loss) "
@@ -141,12 +145,15 @@ def log_evaluation(
 ) -> None:
     """Registra o desempenho medido em um lote rotulado.
 
-    Guarda a matriz de confusão, não o F1 já calculado. Isso permite
-    reagregar depois por qualquer recorte sem recalcular nada — e evita
-    o erro de tirar média de F1, que não é o F1 do conjunto.
+    A matriz de confusão é armazenada, e não o F1 previamente calculado.
+    Assim, é possível reagregar os resultados posteriormente por qualquer
+    recorte sem precisar reprocessar os dados. Isso também evita o erro de
+    calcular a média de valores de F1, que geralmente não corresponde ao F1
+    do conjunto agregado.
 
-    `model_version` é a versão que PRODUZIU as previsões avaliadas, ou
-    seja, a versão anterior à atualização que este lote disparou.
+    `model_version` identifica a versão que PRODUZIU as predições avaliadas.
+    Portanto, corresponde à versão anterior à atualização eventualmente
+    disparada por esse lote.
     """
     with connect(db_path) as conn:
         conn.execute(
@@ -163,7 +170,7 @@ def log_evaluation(
 # --------------------------------------------------------------------------
 
 def prediction_stats(db_path: Path = DB_PATH) -> Dict:
-    """Volume, taxa de positivos e distribuição das probabilidades."""
+    """Calcula o volume de predições, a taxa de positivos e a distribuição das probabilidades."""
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT COUNT(*) n, AVG(probability) mean_prob, "
@@ -204,7 +211,9 @@ def prediction_stats(db_path: Path = DB_PATH) -> Dict:
 
 
 def update_stats(db_path: Path = DB_PATH) -> Dict:
-    """Quantas atualizações houve e quantas amostras foram aprendidas."""
+    """Calcula o número de atualizações realizadas e a quantidade de
+    amostras utilizadas no aprendizado.
+    """
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT COUNT(*) n, SUM(n_samples) samples, MAX(created_at) last "
@@ -218,12 +227,12 @@ def update_stats(db_path: Path = DB_PATH) -> Dict:
 
 
 def performance_stats(db_path: Path = DB_PATH) -> Optional[Dict]:
-    """Desempenho acumulado, somando as matrizes de confusão registradas.
+    """Calcula o desempenho acumulado somando as matrizes de confusão registradas.
 
-    Devolve None enquanto nenhum lote rotulado tiver chegado via
-    `/update`. Não há como medir acerto sem rótulo verdadeiro, e
-    devolver zeros seria pior do que devolver None: pareceria um modelo
-    com desempenho nulo, e não ausência de medição.
+    Retorna `None` enquanto nenhum lote rotulado tiver sido recebido por meio
+    de `/update`. Sem o rótulo verdadeiro, não é possível medir o acerto.
+    Retornar zeros seria inadequado, pois indicaria um modelo com desempenho
+    nulo, em vez de representar a ausência de medição.
     """
     with connect(db_path) as conn:
         row = conn.execute(
@@ -240,7 +249,9 @@ def performance_stats(db_path: Path = DB_PATH) -> Optional[Dict]:
 
 
 def recent_predictions(limit: int = 200, db_path: Path = DB_PATH) -> List[Dict]:
-    """Últimas predições servidas, da mais recente para a mais antiga."""
+    """Retorna as predições servidas mais recentemente, ordenadas da mais
+    nova para a mais antiga.
+    """
     with connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, created_at, model_version, probability, prediction "
