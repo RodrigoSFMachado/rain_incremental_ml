@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Testes e validações
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fazer checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-train.txt
+
+      - name: Instalar dependências de treino e testes
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-train.txt
+
+      - name: Executar testes automatizados
+        run: |
+          pytest tests/ -q
+
+      - name: Validar configuração do Docker Compose
+        run: |
+          docker compose config --quiet
+
+      - name: Construir imagem da API
+        run: |
+          docker build -f Dockerfile -t rain-incremental-ml-api:ci .
