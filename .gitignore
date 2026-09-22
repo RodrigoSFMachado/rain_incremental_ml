@@ -2,7 +2,7 @@
 # Dados
 # ═══════════════════════════════════════════════════════════════
 
-# O CSV bruto tem 31 MB e é público: quem clonar baixa-o da fonte
+# O CSV bruto tem ~31 MB e é público: quem clonar baixa da fonte
 # (Iowa Environmental Mesonet). O Parquet é derivado dele.
 data/*.csv
 data/*.parquet
@@ -13,8 +13,7 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 
-# Mantém a pasta `data/` no repositório mesmo estando vazia, para que
-# quem clonar não precise criá-la manualmente.
+# Mantém a pasta `data/` no repositório mesmo estando vazia.
 !data/.gitkeep
 
 
@@ -30,22 +29,15 @@ mlartifacts/
 
 
 # ═══════════════════════════════════════════════════════════════
-# ATENÇÃO: o que NÃO deve ser ignorado
+# Modelos
 # ═══════════════════════════════════════════════════════════════
 
-# `models/model.pt` tem 9,6 KB, e o Dockerfile executa `COPY models/`.
-# Se o arquivo for ignorado, o build da imagem falhará.
-models/model.pt
-models/registry.json
-
-# Isso pode parecer contraintuitivo, porque arquivos `.pt` costumam ser
-# binários grandes. Neste projeto, o checkpoint é pequeno e faz parte
-# do artefato entregue.
-
-# Antes de commitar, confirme que o modelo é o do treinamento inicial:
-# python -m training.train_initial --no-mlflow
+# O checkpoint baseline (v1) é pequeno (~10 KB) e faz parte do
+# artefato entregue. Por isso model.pt e registry.json NÃO são
+# ignorados e devem estar versionados.
 #
-# Executar `simulate_production.py` sobrescreve `model.pt`.
+# Se quiser regenerar o baseline, execute:
+#   python -m training.train_initial --no-mlflow
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -58,7 +50,6 @@ __pycache__/
 *.so
 .Python
 
-
 # Ambientes virtuais
 .venv/
 venv/
@@ -66,13 +57,11 @@ env/
 ENV/
 .conda/
 
-
 # Empacotamento
 build/
 dist/
 *.egg-info/
 .eggs/
-
 
 # Testes e cobertura
 .pytest_cache/
@@ -89,8 +78,7 @@ htmlcov/
 # ═══════════════════════════════════════════════════════════════
 
 # O projeto não usa `.env` atualmente, mas esta regra impede que
-# credenciais sejam adicionadas ao histórico do Git. Depois de
-# commitado, um segredo continua no histórico mesmo se for removido.
+# credenciais sejam adicionadas ao histórico do Git.
 .env
 .env.*
 !.env.example
@@ -120,11 +108,9 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
-
 # macOS
 .DS_Store
 .AppleDouble
-
 
 # Linux
 .fuse_hidden*
