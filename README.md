@@ -1,12 +1,14 @@
 # 🌧️ Rain Prediction: previsão de chuva com aprendizado incremental
 
-API de previsão de chuva na próxima hora com PyTorch e FastAPI, acompanhada de um ciclo operacional de aprendizado incremental: o serviço prevê, recebe rótulos posteriormente, mede o desempenho antes do update, atualiza os pesos sem recriar o modelo e registra cada nova versão.
+Sistema que prevê chuva na próxima hora e demonstra atualização incremental após o modelo ser colocado em serviço. A API serve previsões, recebe os rótulos verdadeiros quando eles ficam disponíveis e atualiza os pesos do modelo sem recriá-lo. Pesos, estado do Adam, scaler e limiar são preservados entre as atualizações, e cada atualização é versionada.
 
-**Tecnologias:** `PyTorch` · `FastAPI` · `SQLite` · `Streamlit` · `MLflow` · `Docker Compose` · `Render`
+![CI](https://github.com/RodrigoSFMachado/rain_incremental_ml/actions/workflows/ci.yml/badge.svg)
+
+**Tecnologias:** `PyTorch` · `FastAPI` · `SQLite` · `Streamlit` · `MLflow` · `Docker Compose` · `GitHub Actions` · `Render`
 
 [**API pública**](https://rain-incremental-ml.onrender.com) · [**Swagger público**](https://rain-incremental-ml.onrender.com/docs) · [**Health check**](https://rain-incremental-ml.onrender.com/health)
 
-> **Escopo:** projeto de portfólio e demonstração de ML/MLOps. Não é um sistema meteorológico operacional e não deve ser usado para decisões reais. A API pública foi validada para inferência no Render; como o filesystem do plano gratuito é efêmero, updates em runtime não oferecem persistência durável.
+> **Escopo:** projeto de portfólio e demonstração de ML/MLOps. Não é um sistema meteorológico operacional e não deve ser usado para decisões reais. A API pública foi validada para inferência no Render; como o filesystem do plano gratuito é efêmero, updates em runtime não oferecem persistência durável. O replay percorre o mesmo período do teste offline e não é evidência independente de generalização.
 
 ![Dashboard de monitoramento](docs/images/09-dashboard-monitoramento-v25.png)
 
@@ -29,7 +31,7 @@ O limiar final foi `0,84`, calibrado na validação de 2023. A linha de persist�
 
 ### Replay operacional
 
-O replay percorreu os dados de 2024–2025 hora a hora, com os rótulos chegando em lotes a cada 30 dias. O protocolo é prequencial: o modelo prediz primeiro, o lote é avaliado com o estado anterior e só depois os pesos são atualizados.
+O replay percorreu os dados de 2024–2025 hora a hora, com os rótulos chegando em lotes a cada 30 dias. O modelo prediz primeiro, o lote é avaliado com o estado anterior e só depois os pesos são atualizados.
 
 | Indicador | Resultado |
 |---|---:|
@@ -78,7 +80,6 @@ flowchart TD
         TRAIN --> REG[(models/registry.json)]
         TRAIN --> MLF[(mlflow.db)]
     end
-
     subgraph ONLINE["ONLINE"]
         CLIENT[Cliente HTTP] -->|POST /predict| API[FastAPI]
         CLIENT -->|POST /update| API
@@ -88,7 +89,6 @@ flowchart TD
         DB --> DASH[Streamlit]
         REG --> DASH
     end
-
     MODEL -. carregado no startup .-> RM
 ```
 
@@ -207,12 +207,19 @@ streamlit run dashboard/app.py
 
 Os dados brutos e o dataset Parquet são ignorados pelo Git. Isso mantém o repositório leve e permite reconstruir o dataset a partir da fonte do IEM.
 
-## Testes e evidências
+## Testes e validações
 
 ```bash
 pytest tests/ -q
 docker compose config --quiet
+docker build -f Dockerfile -t rain-incremental-ml-api:ci .
 ```
+
+O projeto possui integração contínua no GitHub Actions. A cada push ou pull request na branch `main`, o workflow configura Python 3.11, instala o PyTorch CPU e as dependências de treino e testes, executa a suíte automatizada, valida o Docker Compose e constrói a imagem da API.
+
+A execução local foi validada com **20 testes aprovados**, configuração do Docker Compose sem erros e build da imagem da API concluído. O workflow também foi executado com sucesso no GitHub Actions, incluindo testes, validação do Compose e construção da imagem Docker.
+
+![CI no GitHub Actions](docs/images/12-github-actions-ci.png)
 
 A execução validada inclui preparação de dados, treino inicial, inferência local, replay de 730 dias, 24 updates, versionamento, monitoramento Streamlit, Docker Compose com os dois serviços `healthy`, deploy público no Render e predição pública HTTP 200.
 
@@ -248,6 +255,7 @@ tests/        testes de API e continuidade incremental
 models/       model.pt e registry.json versionados
 data/         dados e SQLite locais, ignorados pelo Git
 docs/images/  evidências visuais da execução
+.github/      workflow de CI do GitHub Actions
 Dockerfile · Dockerfile.dashboard · docker-compose.yml · render.yaml
 ```
 
@@ -257,7 +265,6 @@ Dockerfile · Dockerfile.dashboard · docker-compose.yml · render.yaml
 - Endpoint `/ready` separado de `/health`.
 - Aceitar timestamp no `/predict` e derivar variáveis temporais no servidor.
 - Separar leitura e escrita para permitir múltiplos workers.
-- CI no GitHub Actions.
 - Persistência de modelo e registry em volume ou object storage no deploy.
 - Download automatizado do CSV do IEM.
 
