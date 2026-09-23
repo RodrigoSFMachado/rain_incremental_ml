@@ -1,8 +1,8 @@
 """Transforma o CSV bruto do ASOS em um dataset pronto para modelagem.
 
-O CSV é baixado manualmente pela interface do Iowa Environmental Mesonet
-(ASOS/AWOS/METAR). Os parâmetros exatos do download estão documentados
-no README, na seção "Dados".
+O CSV é obtido do Iowa Environmental Mesonet (ASOS/AWOS/METAR). O README,
+na seção "Pipeline local completo", documenta um comando `curl` reproduzível
+para baixar a estação MIA no período de 2021 a 2025.
 
 Por padrão, o pipeline espera encontrar o arquivo em:
 

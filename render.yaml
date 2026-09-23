@@ -1,36 +1,35 @@
-# Deploy no Render (free tier).
+# Deploy da API no Render (free tier).
 #
-# STATUS: configuração preparada, mas AINDA NÃO validada por um deploy
-# real na nuvem. Até aqui, o que foi validado é a execução local via
-# Docker Compose. Trate este arquivo como próximo passo, não como um
-# ambiente em funcionamento.
+# STATUS: deploy público validado para inferência. O serviço está acessível
+# pela URL documentada no README, com health check, Swagger e `POST /predict`
+# validados. O serviço atualmente exibido no painel foi criado manualmente;
+# por isso, a região efetiva do serviço pode ser diferente da região declarada
+# abaixo no Blueprint.
 #
-# Uso: no painel do Render, selecione "New > Blueprint" e aponte para o
-# repositório.
-#
-# Escopo: apenas a API. O dashboard não é publicado por este blueprint.
+# Este arquivo descreve uma forma reproduzível de criar a API pelo fluxo
+# "New > Blueprint" do Render. Ele cobre somente a API; o dashboard não é
+# publicado por este blueprint.
 #
 # Limitações relevantes do plano gratuito:
 #
-# 1. O serviço hiberna após 15 minutos sem tráfego. A primeira requisição
-#    depois disso pode levar até um minuto para responder.
+# 1. O serviço pode hibernar após um período sem tráfego. A primeira
+#    requisição depois disso pode levar mais tempo para responder.
 #
-# 2. O disco é efêmero. O modelo atualizado por `/update`, o `registry.json`
-#    e o `monitoring.db` retornam ao estado da imagem após cada reinício ou
-#    deploy. Na nuvem, `/update` demonstra o ciclo, mas não oferece
-#    persistência durável do aprendizado.
+# 2. O filesystem é efêmero. O modelo atualizado por `/update`, o
+#    `registry.json` e o `monitoring.db` retornam ao estado da imagem após
+#    reinício ou novo deploy. Na nuvem, `/update` demonstra o ciclo, mas não
+#    oferece persistência durável do aprendizado.
 #
-#    Para persistência real, seria necessário um volume pago ou
-#    armazenamento externo — fora do escopo deste projeto e documentado
-#    no README.
+#    Para persistência real, seria necessário um volume persistente ou
+#    armazenamento externo, como object storage. Isso permanece fora do
+#    escopo deste projeto e está documentado no README.
 #
-# 3. O plano gratuito oferece 512 MB de RAM. Como a importação do PyTorch
-#    consome cerca de 250 MB, a imagem precisa usar o torch CPU-only,
-#    conforme configurado no Dockerfile. A versão do PyPI, com bibliotecas
-#    CUDA, não cabe nesse limite.
+# 3. O plano gratuito oferece recursos limitados. A imagem usa PyTorch
+#    CPU-only, conforme configurado no Dockerfile, para evitar o tamanho das
+#    bibliotecas CUDA distribuídas pela versão padrão do PyPI.
 #
-# A plataforma injeta a porta pela variável `PORT`. O CMD do Dockerfile
-# utiliza essa variável e mantém 8000 como fallback no ambiente local.
+# A plataforma injeta a porta pela variável `PORT`. O CMD do Dockerfile usa
+# essa variável e mantém 8000 como fallback para o ambiente local.
 
 services:
   - type: web
