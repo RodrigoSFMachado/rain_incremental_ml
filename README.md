@@ -10,44 +10,47 @@ Sistema que prevê chuva na próxima hora e demonstra atualização incremental 
 
 > **Escopo:** projeto de portfólio e demonstração de ML/MLOps. Não é um sistema meteorológico operacional e não deve ser usado para decisões reais. A API pública foi validada para inferência no Render; como o filesystem do plano gratuito é efêmero, updates em runtime não oferecem persistência durável. O replay percorre o mesmo período do teste offline e não é evidência independente de generalização.
 
-![Dashboard de monitoramento](docs/images/09-dashboard-monitoramento-v25.png)
+![Dashboard de monitoramento](docs/images/09-dashboard-monitoramento.png)
 
 ## Resultado principal
 
-A estação usada é a MIA, em Miami, com dados do [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml). O dataset preparado contém 43.624 observações horárias, 16 features e cobre de 2021-01-01 a 2025-12-30. O alvo é `rain_next_hour`.
+A estação usada é a MIA, em Miami, com dados do [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml). O dataset preparado contém 121.404 observações horárias, 16 features e cobre de 2012-02-01 a 2025-12-30. O alvo é `rain_next_hour`.
 
 ### Avaliação offline
 
-O split é temporal: treino em 2021–2022, calibração do limiar em 2023 e teste final em 2024–2025.
+O split é temporal: treino em 2012–2013, calibração do limiar em 2014 e teste final em 2015–2025. O teste foi usado uma única vez.
 
 | Modelo | F1 | Precisão | Recall | ROC AUC |
 |---|---:|---:|---:|---:|
-| **MLP PyTorch** | **0,534** | 0,543 | 0,526 | **0,894** |
-| Persistência | 0,510 | 0,511 | 0,510 | 0,743 |
+| **MLP PyTorch** | **0,521** | 0,555 | 0,491 | **0,884** |
+| Persistência | 0,492 | 0,491 | 0,493 | 0,731 |
 
-O limiar final foi `0,84`, calibrado na validação de 2023. A linha de persistência representa a regra “se está chovendo agora, vai chover na próxima hora” e funciona como referência de sanidade.
+O limiar final foi `0,87`, calibrado na validação de 2014. A linha de persistência representa a regra “se está chovendo agora, vai chover na próxima hora” e funciona como referência de sanidade. O ganho de F1 sobre a baseline foi de `+0,029`.
 
 ![Treino inicial do baseline](docs/images/03-treino-inicial-v1.png)
 
 ### Replay operacional
 
-O replay percorreu os dados de 2024–2025 hora a hora, com os rótulos chegando em lotes a cada 30 dias. O modelo prediz primeiro, o lote é avaliado com o estado anterior e só depois os pesos são atualizados.
+O replay percorreu os dados de 2015–2025 hora a hora, com os rótulos chegando em lotes a cada 30 dias. O modelo prediz primeiro, o lote é avaliado com o estado anterior e só depois os pesos são atualizados.
 
 | Indicador | Resultado |
 |---|---:|
-| Período | 2024-01-01 a 2025-12-30 |
-| Predições servidas | 17.443 |
-| Atualizações incrementais | 24 |
-| Versão final | **v25** |
-| Rótulos recebidos | 17.205 |
-| Probabilidade média | 0,2899 |
-| F1 acumulado | 0,535 |
-| Precisão acumulada | 0,540 |
-| Recall acumulado | 0,530 |
+| Período | 2015-01-01 a 2025-12-30 |
+| Predições servidas | 95.919 |
+| Atualizações incrementais | 133 |
+| Versão final | **v134** |
+| Rótulos recebidos | 95.274 |
+| Probabilidade média | 0,281 |
+| F1 acumulado | 0,518 |
+| Precisão acumulada | 0,568 |
+| Recall acumulado | 0,476 |
+| Acurácia acumulada | 0,951 |
 
-O replay demonstra o ciclo operacional e o versionamento de v1 a v25. Ele percorre o mesmo período do teste offline, portanto não é evidência independente de generalização para dados futuros.
+O replay demonstra o ciclo operacional e o versionamento de v1 a v134. Ele percorre o mesmo período do teste offline, portanto não é evidência independente de generalização para dados futuros. A diferença entre predições servidas e rótulos recebidos corresponde às observações que permaneceram no buffer final por não completarem uma janela de atualização de 30 dias.
 
-![Replay operacional completo](docs/images/06-simulacao-completa-2024-2025.png)
+![Início do replay operacional](docs/images/06a-simulacao-2015-2025.png)
+
+![Resumo do replay operacional](docs/images/06b-simulacao-2015-2025.png)
 
 ## Fluxo do sistema
 
@@ -117,7 +120,19 @@ A avaliação ocorre antes do treino em cada update. Assim, as métricas de uma 
 16 features → Linear(16) → ReLU → Linear(1) → logit
 ```
 
-A rede tem 289 parâmetros. A loss usa `BCEWithLogitsLoss(pos_weight ≈ 18)` para lidar com o desbalanceamento, e o scaler é ajustado uma vez e congelado. O split temporal evita vazamento entre períodos correlacionados.
+A rede tem 289 parâmetros. A loss do treino inicial terminou em `0,7180`, com `pos_weight = 15,40`. O scaler é ajustado uma vez e congelado. O split temporal evita vazamento entre períodos correlacionados.
+
+### Divisão temporal
+
+| Conjunto | Período | Observações | Uso |
+|---|---|---:|---|
+| Treino | 2012 e 2013 | 16.760 | Aprende os pesos |
+| Validação | 2014 | 8.725 | Calibra o limiar de decisão |
+| Teste | 2015 a 2025 | 95.919 | Avaliação final, usada uma única vez |
+
+**Por que não usar split aleatório?** Embaralhar colocaria observações de períodos próximos em treino e teste. Como as horas vizinhas são correlacionadas, isso permitiria acesso indireto à resposta e produziria uma métrica otimista.
+
+**Por que calibrar o limiar na validação?** Escolhê-lo olhando o teste transformaria o teste em treino e inflaria o resultado final.
 
 ## API
 
@@ -180,19 +195,22 @@ source .venv/bin/activate
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements-train.txt
 
-# Baixe o CSV completo da estação MIA, de 2021 a 2025.
-curl -L "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?network=FL_ASOS&station=MIA&data=all&year1=2021&month1=1&day1=1&year2=2025&month2=12&day2=31&tz=Etc%2FUTC&format=onlycomma&latlon=no&elev=no&missing=M&trace=T&direct=no&report_type=3&report_type=4" \
-  -o data/MIA_2021_2025.csv
+# Baixe o CSV completo da estação MIA, de 2012 a 2025.
+curl -L "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?network=FL_ASOS&station=MIA&data=all&year1=2012&month1=1&day1=1&year2=2025&month2=12&day2=31&tz=Etc%2FUTC&format=onlycomma&latlon=no&elev=no&missing=M&trace=T&direct=no&report_type=3&report_type=4" \
+  -o data/MIA_2012_2025.csv
 
-# O pipeline filtra as colunas, trata ausências, cria o alvo e deriva as features.
+# Prepare o dataset.
 python -m training.prepare_data \
-  --input data/MIA_2021_2025.csv \
-  --start-year 2021
+  --input data/MIA_2012_2025.csv \
+  --start-year 2012
 
+# Treine o modelo inicial.
 python -m training.train_initial
+
+# Execute o replay operacional.
 python -m training.simulate_production \
-  --start 2024-01-01 \
-  --days 730 \
+  --start 2015-01-01 \
+  --days 4017 \
   --update-every-days 30 \
   --in-process
 ```
@@ -217,28 +235,30 @@ docker build -f Dockerfile -t rain-incremental-ml-api:ci .
 
 O projeto possui integração contínua no GitHub Actions. A cada push ou pull request na branch `main`, o workflow configura Python 3.11, instala o PyTorch CPU e as dependências de treino e testes, executa a suíte automatizada, valida o Docker Compose e constrói a imagem da API.
 
-A execução local foi validada com **20 testes aprovados**, configuração do Docker Compose sem erros e build da imagem da API concluído. O workflow também foi executado com sucesso no GitHub Actions, incluindo testes, validação do Compose e construção da imagem Docker.
+A execução local foi validada com 20 testes aprovados, configuração do Docker Compose sem erros, build da imagem da API concluído, preparação do dataset 2012–2025, treino inicial, replay de 95.919 horas, 133 updates, versionamento de v1 a v134, dashboard operacional e predição pública HTTP 200.
 
 ![CI no GitHub Actions](docs/images/12-github-actions-ci.png)
 
-A execução validada inclui preparação de dados, treino inicial, inferência local, replay de 730 dias, 24 updates, versionamento, monitoramento Streamlit, Docker Compose com os dois serviços `healthy`, deploy público no Render e predição pública HTTP 200.
-
 ## Dados
 
-Fonte: [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml), estação `MIA`, UTC, período de 2021-01-01 a 2025-12-31. O download programático completo está documentado na seção **Pipeline local completo**.
+Fonte: [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/request/download.phtml), estação `MIA`, UTC, período de 2012-01-01 a 2025-12-31. O download programático completo está documentado na seção **Pipeline local completo**.
 
-Campos brutos podem variar conforme a resposta do IEM; o pipeline seleciona e transforma as colunas necessárias. O alvo é a ocorrência de chuva na próxima hora, protegida contra observações seguintes que não estejam aproximadamente uma hora à frente.
+O dataset preparado efetivo contém dados de `2012-02-01 03:53:00` a `2025-12-30 22:53:00`, com 121.404 observações, 16 features e taxa positiva de 5,56%. Campos brutos podem variar conforme a resposta do IEM; o pipeline seleciona e transforma as colunas necessárias. O alvo é a ocorrência de chuva na próxima hora, protegida contra observações seguintes que não estejam aproximadamente uma hora à frente.
+
+![Dataset preparado 2012–2025](docs/images/02-dataset-preparado-2012-2025.png)
 
 ## Monitoramento
 
-O SQLite registra predições, atualizações e avaliações. O dashboard mostra volume de tráfego, versão em uso, distribuição de probabilidades e desempenho acumulado. A métrica por lote pode oscilar bastante; por isso o F1 acumulado é a referência principal.
+O SQLite registra predições, atualizações e avaliações. O dashboard mostra volume de tráfego, versão em uso, distribuição de probabilidades e desempenho acumulado. No replay final, foram registradas 95.919 predições, 95.274 rótulos, 133 updates e a versão v134. O desempenho acumulado foi F1 0,518, precisão 0,568 e recall 0,476.
 
-![Dashboard operacional](docs/images/09-dashboard-monitoramento-v25.png)
+![Dashboard operacional](docs/images/09-dashboard-monitoramento.png)
+
+![Versionamento e monitoramento](docs/images/07-versionamento-e-monitoramento.png)
 
 ## Limitações
 
 - O modelo usa uma única estação meteorológica em Miami; os resultados não se transferem automaticamente para outros climas.
-- As saídas não são probabilidades calibradas em sentido absoluto. O `pos_weight` desloca a escala; `0.84` é um limiar de decisão, não “84% de chance de chuva”.
+- As saídas não são probabilidades calibradas em sentido absoluto. O `pos_weight` desloca a escala; `0,87` é um limiar de decisão, não “87% de chance de chuva”.
 - O projeto não implementa detector automático de drift, alertas ou retreinamento agendado.
 - A API usa um único worker porque o modelo é atualizado in-place.
 - SQLite é adequado para demonstração local e baixa concorrência, não para múltiplas instâncias escrevendo simultaneamente.
