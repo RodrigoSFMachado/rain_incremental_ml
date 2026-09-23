@@ -3,15 +3,15 @@
     "version": 1,
     "model_path": "models\\model.pt",
     "stage": "initial_training",
-    "n_samples": 17459,
+    "n_samples": 16760,
     "metrics": {
-      "f1": 0.5342,
-      "precision": 0.5427,
-      "recall": 0.5259,
-      "roc_auc": 0.8936
+      "f1": 0.5206,
+      "precision": 0.5546,
+      "recall": 0.4906,
+      "roc_auc": 0.8842
     },
-    "notes": "Treino inicial 2021-2022. Métricas medidas no conjunto de teste 2024-2025, com limiar calibrado em 2023.",
-    "created_at": "2026-09-22T15:54:04.086422+00:00",
+    "notes": "Treino inicial 2012-2013. Métricas medidas no conjunto de teste 2015-2025, com limiar calibrado em 2014.",
+    "created_at": "2026-09-23T18:02:31.339207+00:00",
     "is_current": true
   }
 ]

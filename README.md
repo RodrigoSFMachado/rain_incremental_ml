@@ -152,8 +152,8 @@ Exemplo de resposta do `POST /predict`:
 ```json
 {
   "prediction": 0,
-  "probability": 0.7933,
-  "threshold": 0.84,
+  "probability": 0.7506,
+  "threshold": 0.87,
   "model_version": 1,
   "prediction_id": 1
 }
