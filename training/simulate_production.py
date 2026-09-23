@@ -29,7 +29,11 @@ Se quiser preservar o modelo do treinamento inicial, execute:
 
     python -m training.train_initial
 
-após a simulação para restaurar o checkpoint v1. Como alternativa, use
+após a simulação para restaurar o checkpoint v1. Se a v1 foi treinada com
+outro split, repita os mesmos --train-years, --val-year e --test-years.
+ 
+O período do replay deve ficar dentro dos anos de teste usados no treino
+inicial; caso contrário, o modelo seria avaliado em dados que já viu. Como alternativa, use
 `--no-update` para gerar apenas predições.
 
 Uso:
@@ -38,13 +42,16 @@ Uso:
     uvicorn app.main:app &
     python -m training.simulate_production --days 120
 
-    # Sem iniciar um servidor:
-    python -m training.simulate_production --days 730 --in-process
+    # Sem iniciar um servidor: replay de todo o período de teste.
+    python -m training.simulate_production \
+        --start 2015-01-01 \
+        --days 4017 \
+        --in-process
 
     # Com intervalo de atualização personalizado:
     python -m training.simulate_production \
-        --start 2024-01-01 \
-        --days 730 \
+        --start 2015-01-01 \
+        --days 4017 \
         --update-every-days 30 \
         --in-process
 """
@@ -84,8 +91,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Simula tráfego de produção.")
     parser.add_argument("--data", default="data/dataset.parquet")
     parser.add_argument("--api-url", default="http://localhost:8000")
-    parser.add_argument("--start", default="2025-06-01")
-    parser.add_argument("--days", type=int, default=120)
+    parser.add_argument("--start", default="2015-01-01")
+    parser.add_argument("--days", type=int, default=4017)
     parser.add_argument(
         "--update-every-days", type=int, default=DEFAULT_UPDATE_EVERY_DAYS,
         help=(
